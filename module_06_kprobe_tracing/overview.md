@@ -345,3 +345,118 @@ Create a kprobe on netif_receive_skb to count packets per interface.
 [Module 7: Network Stack Tracing →](../module_07_network_tracing/)
 
 [← Back to Course Index](../index.md)
+
+---
+
+## AXIOMATIC EXERCISES — BRUTE FORCE CALCULATION
+
+### EXERCISE A: REGISTER TO ARGUMENT MAPPING
+
+```
+x86_64 Calling Convention:
+  arg1=RDI, arg2=RSI, arg3=RDX, arg4=RCX, arg5=R8, arg6=R9
+
+GIVEN: Kprobe on function
+  int do_sys_openat2(int dfd, const char __user *filename, struct open_how *how, size_t usize)
+
+TASK: Map each argument
+
+1. dfd (int) → regs->___ = ___
+2. filename (char *) → regs->___ = ___
+3. how (struct *) → regs->___ = ___
+4. usize (size_t) → regs->___ = ___
+
+GIVEN: regs at probe point:
+  di=0xFFFFFFFF, si=0x7FFE12345678, dx=0xFFFF888112340000, cx=0x18
+
+EXTRACT:
+  dfd = ___ (hint: -1 for AT_FDCWD)
+  filename = ___ (userspace pointer)
+  how = ___ (kernel pointer)
+  usize = ___ (24 bytes = sizeof struct open_how)
+```
+
+### EXERCISE B: KPROBE ADDRESS RESOLUTION
+
+```
+GIVEN:
+  /proc/kallsyms shows:
+    ffffffff812a5678 T handle_mm_fault
+    ffffffff812a5680 t __handle_mm_fault
+    ffffffff812a57b0 T do_user_addr_fault
+
+TASK:
+
+1. kp.symbol_name = "handle_mm_fault" → resolved to 0x___
+2. offset to __handle_mm_fault = 0x___ - 0x___ = ___ bytes
+3. If kp.offset = 8, probe address = 0x___ + 8 = 0x___
+4. Probe at function+8 skips ___ bytes of prologue
+```
+
+### EXERCISE C: REGS STRUCTURE OFFSET
+
+```
+GIVEN: struct pt_regs layout (x86_64)
+
+offset | field
+-------+---------
+0x00   | r15
+0x08   | r14
+0x10   | r13
+0x18   | r12
+0x20   | bp
+0x28   | bx
+0x30   | r11
+0x38   | r10
+0x40   | r9
+0x48   | r8
+0x50   | ax
+0x58   | cx
+0x60   | dx
+0x68   | si
+0x70   | di
+0x78   | orig_ax
+0x80   | ip
+0x88   | cs
+0x90   | flags
+0x98   | sp
+0xA0   | ss
+
+TASK: Given regs pointer = 0xFFFF888100001000
+
+1. Address of regs->di = 0x___ + 0x70 = 0x___
+2. Address of regs->si = 0x___ + 0x68 = 0x___
+3. Address of regs->ip = 0x___ + 0x80 = 0x___
+4. Address of regs->sp = 0x___ + 0x98 = 0x___
+```
+
+### EXERCISE D: SAFE POINTER CHECK
+
+```
+GIVEN: Handler receives regs, wants to read struct from arg1
+
+TASK: Identify safety checks needed
+
+1. ptr = (void *)regs->di → ptr = 0x___
+2. Check: ptr != NULL → ___
+3. Check: ptr is kernel address? (ptr >= 0xFFFF800000000000) → ___
+4. Check: ptr is aligned to struct size? → ___
+5. Only then dereference: value = ptr->field
+
+UNSAFE CODE (identify bug):
+    struct foo *p = (void *)regs->di;
+    pr_info("%d\n", p->value);  // Bug: ___________________
+```
+
+---
+
+## FAILURE PREDICTIONS
+
+```
+FAILURE 1: Wrong register for argument → reading random data
+FAILURE 2: Userspace pointer in kernel → cannot dereference directly
+FAILURE 3: NULL pointer dereference in handler → kernel oops
+FAILURE 4: Sleeping in handler (atomic context) → deadlock
+FAILURE 5: printk without ratelimit → log flood, performance drop
+FAILURE 6: regs->di is arg1, regs->ax is return value → confusion
+```

@@ -462,3 +462,127 @@ Create a kernel module that:
 [Module 4: struct page Deep Dive →](../module_04_struct_page/)
 
 [← Back to Course Index](../index.md)
+
+---
+
+## AXIOMATIC EXERCISES — BRUTE FORCE CALCULATION
+
+### EXERCISE A: ORDER CALCULATION
+
+```
+GIVEN: Need to allocate 27000 bytes
+
+TASK:
+
+1. Pages needed = ceil(27000 / 4096) = ceil(___) = ___ pages
+2. Next power of 2 ≥ ___ pages = ___ pages
+3. Order = log2(___) = ___
+4. Actual allocation = 2^___ × 4096 = ___ bytes
+5. Internal fragmentation = ___ - 27000 = ___ bytes = ___% wasted
+```
+
+### EXERCISE B: BUDDY SPLIT
+
+```
+GIVEN: Request order-2 (16KB), only order-4 (64KB) available
+
+TASK: Show split chain
+
+┌────────────────────────────────────────────────────────────┐
+│ Order-4 block at PFN 0x1000 (64KB)                        │
+└────────────────────────────────────────────────────────────┘
+
+SPLIT 1: Order-4 → two Order-3
+┌────────────────────────────┬────────────────────────────┐
+│ Order-3 at PFN ___         │ Order-3 at PFN ___         │
+│ (___KB)                    │ (___KB) → to free_area[3]  │
+└────────────────────────────┴────────────────────────────┘
+
+SPLIT 2: Order-3 → two Order-2
+┌─────────────┬─────────────┐
+│ Order-2     │ Order-2     │
+│ PFN ___     │ PFN ___     │
+│ RETURNED    │ free_area[2]│
+└─────────────┴─────────────┘
+
+CALCULATE PFNs: 
+  PFN difference between buddies at order N = 2^N
+```
+
+### EXERCISE C: BUDDY ADDRESS CALCULATION
+
+```
+GIVEN: PFN = 0x1234, order = 3
+
+TASK:
+
+1. Buddy PFN = PFN XOR (1 << order)
+2. = 0x1234 XOR (1 << 3)
+3. = 0x1234 XOR 0x___
+4. = 0b_______________ XOR 0b_______________
+5. = 0b_______________
+6. = 0x___
+
+VERIFY: 0x1234 XOR 0x___ = 0x___ (original PFN) ✓
+```
+
+### EXERCISE D: SLAB OBJECT COUNT
+
+```
+GIVEN:
+  Slab page size = 4096 bytes
+  Object size = 192 bytes
+  Metadata per slab = 64 bytes
+
+TASK:
+
+1. Available for objects = 4096 - 64 = ___ bytes
+2. Objects per slab = floor(___ / 192) = ___
+3. Actual used = ___ × 192 = ___ bytes
+4. Wasted per slab = ___ - ___ = ___ bytes
+```
+
+### EXERCISE E: KMALLOC SIZE CLASS
+
+```
+GIVEN: kmalloc(100, GFP_KERNEL)
+
+TASK:
+
+1. Size classes: 8, 16, 32, 64, 128, 256, 512...
+2. Smallest class ≥ 100 = ___
+3. Internal fragmentation = ___ - 100 = ___ bytes = ___% wasted
+
+REPEAT FOR:
+  kmalloc(1) → class ___, waste ___ bytes
+  kmalloc(33) → class ___, waste ___ bytes
+  kmalloc(4097) → class ___ or alloc_pages?
+```
+
+### EXERCISE F: GFP FLAG CONTEXT
+
+```
+GIVEN scenarios, fill correct GFP flag:
+
+1. Process context, no locks held → GFP___
+2. Spinlock held → GFP___
+3. Interrupt handler → GFP___
+4. softirq context → GFP___
+5. Need zeroed memory → GFP_KERNEL | ___
+6. Need DMA-capable memory → GFP___
+
+WHY: GFP_KERNEL can sleep, GFP_ATOMIC cannot
+```
+
+---
+
+## FAILURE PREDICTIONS
+
+```
+FAILURE 1: ceil(27000/4096) = 6.59 → need 7 pages, not 6
+FAILURE 2: Buddy XOR calculation off by one bit → wrong buddy
+FAILURE 3: Forgetting slab metadata → objects per slab too high
+FAILURE 4: kmalloc(4097) needs order-1 via alloc_pages, not slab
+FAILURE 5: GFP_KERNEL in interrupt context → deadlock
+FAILURE 6: Internal fragmentation percentage = waste/allocated, not waste/requested
+```

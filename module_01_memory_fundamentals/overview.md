@@ -385,3 +385,136 @@ Write a C program that:
 [Module 2: Page Fault Handling →](../module_02_page_fault/)
 
 [← Back to Course Index](../index.md)
+
+---
+
+## 9. AXIOMATIC EXERCISES — BRUTE FORCE CALCULATION
+
+### EXERCISE A: VA INDEX EXTRACTION
+
+```
+GIVEN: VA = 0x7F8A1B2C3D4E
+TASK: Extract all indices. DO NOT SKIP STEPS.
+
+1. VA in binary = ?_?_?_?_?_?_?_?_?_?_?_? (fill 48 bits, group by 4)
+2. bits[47:39] = ?_?_?_?_?_?_?_?_? (9 bits) → decimal = ___
+3. bits[38:30] = ?_?_?_?_?_?_?_?_? (9 bits) → decimal = ___
+4. bits[29:21] = ?_?_?_?_?_?_?_?_? (9 bits) → decimal = ___
+5. bits[20:12] = ?_?_?_?_?_?_?_?_? (9 bits) → decimal = ___
+6. bits[11:0]  = ?_?_?_?_?_?_?_?_?_?_?_? (12 bits) → decimal = ___
+
+VERIFY: PGD_idx × 2^39 + PUD_idx × 2^30 + PMD_idx × 2^21 + PTE_idx × 2^12 + offset = VA ✓ or ✗
+```
+
+### EXERCISE B: PAGE TABLE PHYSICAL ADDRESS CHAIN
+
+```
+GIVEN:
+  CR3 = 0x00000000_12345000
+  PGD[255] = 0x00000000_ABCDE003   (bits[11:0] are flags)
+  PUD[504] = 0x00000000_98765003
+  PMD[145] = 0x00000000_11223003
+  PTE[325] = 0x00000000_FFEEDD003
+
+TASK:
+
+1. PGD base PA = CR3 & ~0xFFF = ___________________
+2. PGD entry addr = PGD base + (255 × 8) = ___ + ___ = ___________________
+3. PUD base PA = PGD[255] & ~0xFFF = ___________________
+4. PUD entry addr = PUD base + (504 × 8) = ___ + ___ = ___________________
+5. PMD base PA = PUD[504] & ~0xFFF = ___________________
+6. PMD entry addr = PMD base + (145 × 8) = ___ + ___ = ___________________
+7. PTE base PA = PMD[145] & ~0xFFF = ___________________
+8. PTE entry addr = PTE base + (325 × 8) = ___ + ___ = ___________________
+9. Page frame PA = PTE[325] & ~0xFFF = ___________________
+10. Final PA = Page frame PA + offset(1656) = ___ + ___ = ___________________
+
+TRICKY: entry × 8 because each entry is 8 bytes (64 bits)
+TRICKY: & ~0xFFF clears low 12 bits (flags), keeps physical address
+```
+
+### EXERCISE C: PAGEMAP CALCULATION
+
+```
+GIVEN:
+  VA = 0x7FFD_1A23_4560
+  Page size = 4096 = 0x1000
+  pagemap entry size = 8 bytes
+
+TASK:
+
+1. Page number = VA / 4096 = 0x7FFD_1A23_4560 / 0x1000 = _______________
+2. pagemap offset = page_number × 8 = _______________ × 8 = _______________
+3. pagemap offset in hex = _______________
+
+USER MUST CALCULATE:
+  0x7FFD_1A23_4560 >> 12 = ?
+  SHOW DIVISION: 0x7FFD_1A23_4560 = ? × 0x1000 + remainder
+```
+
+### EXERCISE D: TLB SIZE CALCULATION
+
+```
+GIVEN:
+  TLB has 1024 entries
+  Each entry: VPN (36 bits) + PFN (40 bits) + flags (8 bits) + PCID (12 bits)
+
+TASK:
+
+1. Entry size = (36 + 40 + 8 + 12) / 8 = ___ bits / 8 = ___ bytes
+2. Total TLB size = 1024 × ___ = ___ bytes = ___ KB
+3. If page is 4KB, TLB covers ___ × 4KB = ___ MB of virtual memory
+
+VERIFY: 1024 entries × 4KB per page = ___ MB ✓
+```
+
+### EXERCISE E: VMA CONTAINS ADDRESS
+
+```
+GIVEN VMAs:
+┌─────────────────────────────────────────────────────────┐
+│ VMA 1: vm_start=0x00400000, vm_end=0x00401000          │
+│ VMA 2: vm_start=0x00401000, vm_end=0x00500000          │
+│ VMA 3: vm_start=0x7FFE0000, vm_end=0x7FFF0000          │
+└─────────────────────────────────────────────────────────┘
+
+TASK: For each address, determine which VMA (or none):
+
+Address 0x00400500: vm_start ≤ addr < vm_end → VMA ___
+Address 0x00401000: vm_start ≤ addr < vm_end → VMA ___
+Address 0x00500000: vm_start ≤ addr < vm_end → VMA ___
+Address 0x7FFEFFFF: vm_start ≤ addr < vm_end → VMA ___
+Address 0x7FFF0000: vm_start ≤ addr < vm_end → VMA ___
+
+TRICKY: vm_end is EXCLUSIVE (first byte AFTER region)
+```
+
+### EXERCISE F: CONTEXT SWITCH CR3
+
+```
+GIVEN:
+  Process A: PGD at PA 0x1234_5000
+  Process B: PGD at PA 0x5678_9000
+  Current CR3 = 0x1234_5000
+
+TASK:
+
+1. CPU running Process A, accesses VA 0x7FFE_0000 → uses CR3 = ___
+2. switch_mm() called, loads Process B → CR3 becomes = ___
+3. CPU running Process B, accesses VA 0x7FFE_0000 → uses CR3 = ___
+4. Same VA, different CR3 → different PA? YES/NO
+5. Without PCID, TLB entries from Process A now VALID/INVALID?
+```
+
+---
+
+## FAILURE PREDICTIONS
+
+```
+FAILURE 1: Forgetting entry size is 8 bytes → wrong pagemap offset
+FAILURE 2: Not masking flags with & ~0xFFF → treating flags as address
+FAILURE 3: vm_end is exclusive → off-by-one on boundary
+FAILURE 4: bits[47:39] means bits 47 down to 39 → 9 bits, not 8
+FAILURE 5: Hex to binary conversion error → all indices wrong
+FAILURE 6: Forgetting TLB invalidation on CR3 change without PCID
+```

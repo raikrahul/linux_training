@@ -345,3 +345,105 @@ Write a kernel module that:
 [Module 6: Kprobe Tracing →](../module_06_kprobe_tracing/)
 
 [← Back to Course Index](../index.md)
+
+---
+
+## AXIOMATIC EXERCISES — BRUTE FORCE CALCULATION
+
+### EXERCISE A: LRU LIST TRANSITIONS
+
+```
+GIVEN: New anonymous page allocated
+
+TASK: Track lru field and flags through lifecycle
+
+T1: alloc_page() called
+    page->lru = disconnected
+    PG_lru = ___, PG_active = ___
+
+T2: lru_cache_add_inactive_or_unevictable()
+    page added to: LRU_INACTIVE_ANON / LRU_ACTIVE_ANON?
+    PG_lru = ___, PG_active = ___
+
+T3: Page accessed, mark_page_accessed() called
+    PG_referenced = ___
+
+T4: kswapd scans, sees PG_referenced set
+    Action: promote to active → PG_active = ___
+    Clear PG_referenced = ___
+
+T5: No access for long time, demote
+    Move to: LRU_INACTIVE_ANON
+    PG_active = ___
+```
+
+### EXERCISE B: PAGE CACHE HIT CALCULATION
+
+```
+GIVEN:
+  File size = 10MB = 10 × 1024 × 1024 bytes
+  Page size = 4096 bytes
+  Cache has pages for offsets: 0, 4096, 8192, 12288, 16384
+
+TASK:
+
+1. Total pages in file = ceil(10MB / 4096) = ceil(___) = ___ pages
+2. Cached pages = ___
+3. Cache coverage = ___ / ___ = ___% 
+4. Read at offset 5000:
+   - Page offset = floor(5000 / 4096) = ___
+   - In cache? page ___ → YES/NO
+5. Read at offset 20000:
+   - Page offset = floor(20000 / 4096) = ___
+   - In cache? page ___ → YES/NO → cache MISS
+```
+
+### EXERCISE C: MLOCK CALCULATION
+
+```
+GIVEN:
+  mlock(ptr, 100000) called
+  ptr = 0x7F0000001234
+
+TASK:
+
+1. Start page = floor(0x7F0000001234 / 4096) = ___
+2. End address = 0x7F0000001234 + 100000 = 0x___
+3. End page = ceil(0x___ / 4096) = ___
+4. Pages to lock = end_page - start_page = ___
+5. Memory locked = ___ × 4096 = ___ bytes
+
+TRICKY: mlock locks entire pages containing the range
+```
+
+### EXERCISE D: INACTIVE LIST RATIO
+
+```
+GIVEN zone stats:
+  NR_ACTIVE_ANON = 50000 pages
+  NR_INACTIVE_ANON = 150000 pages
+  NR_ACTIVE_FILE = 30000 pages
+  NR_INACTIVE_FILE = 70000 pages
+
+TASK:
+
+1. Anon ratio = active / (active + inactive) = ___ / ___ = ___
+2. File ratio = active / (active + inactive) = ___ / ___ = ___
+3. Total anon pages = ___ = ___ MB (at 4KB/page)
+4. Total file pages = ___ = ___ MB
+5. If kswapd reclaims 10000 pages from inactive file:
+   New NR_INACTIVE_FILE = ___
+   New file ratio = ___
+```
+
+---
+
+## FAILURE PREDICTIONS
+
+```
+FAILURE 1: Confusing PG_referenced with PG_active → wrong promotion logic
+FAILURE 2: Page cache index = offset / 4096, not offset
+FAILURE 3: mlock locks PAGES not bytes → boundary alignment matters
+FAILURE 4: _mapcount=-1 means not mapped, not refcount=0
+FAILURE 5: Inactive list is larger than active → more reclaim candidates
+```

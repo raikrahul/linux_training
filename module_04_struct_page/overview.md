@@ -391,3 +391,121 @@ Create a kprobe that tracks get_page/put_page calls for a specific PFN.
 [Module 5: Advanced Memory Topics →](../module_05_advanced_memory/)
 
 [← Back to Course Index](../index.md)
+
+---
+
+## AXIOMATIC EXERCISES — BRUTE FORCE CALCULATION
+
+### EXERCISE A: PFN TO STRUCT PAGE
+
+```
+GIVEN:
+  Physical address = 0x12345678
+  PAGE_SHIFT = 12
+  mem_map base = 0xFFFF_EA00_0000_0000
+  sizeof(struct page) = 64 bytes
+
+TASK:
+
+1. PFN = PA >> PAGE_SHIFT = 0x12345678 >> 12 = 0x___
+2. page offset = PFN × sizeof(struct page) = 0x___ × 64 = 0x___
+3. struct page address = mem_map + offset = 0xFFFF_EA00_0000_0000 + 0x___ = 0x___
+
+VERIFY: page_to_pfn(page) should return 0x___
+```
+
+### EXERCISE B: FLAG EXTRACTION
+
+```
+GIVEN: page->flags = 0x17FFFFC0_00014068
+
+TASK: Extract zone and node (assuming ZONES_SHIFT=2, NODES_SHIFT=6)
+
+1. flags in binary = ___________________________________
+2. Zone bits at position [ZONES_PGSHIFT : ZONES_PGSHIFT+2] = ___
+3. Zone number = ___ → ZONE_DMA32 / ZONE_NORMAL?
+4. Node bits at position [NODES_PGSHIFT : NODES_PGSHIFT+6] = ___
+5. Node number = ___
+
+PAGE FLAGS (low bits):
+6. bit 0 (PG_locked) = ___
+7. bit 3 (PG_referenced) = ___
+8. bit 5 (PG_uptodate) = ___
+9. bit 6 (PG_lru) = ___
+10. bit 13 (PG_active) = ___
+```
+
+### EXERCISE C: MAPPING FIELD DECODE
+
+```
+GIVEN: page->mapping values, determine type:
+
+1. mapping = 0x0000_0000_0000_0000 → ___ (NULL)
+2. mapping = 0xFFFF_8881_1234_5000 → LSB = ___ → ___-backed
+3. mapping = 0xFFFF_8881_1234_5001 → LSB = ___ → ___
+4. mapping = 0xFFFF_8881_1234_5002 → LSB = ___ → ___ (movable)
+5. mapping = 0xFFFF_8881_1234_5003 → LSB = ___ → ___ (KSM)
+
+DECODE:
+  LSB & 1 = 1 → anonymous (anon_vma pointer)
+  LSB & 2 = 2 → movable
+  LSB & 3 = 3 → KSM merged
+  LSB = 0 → file-backed (address_space pointer)
+```
+
+### EXERCISE D: REFCOUNT TRACKING
+
+```
+GIVEN: Scenario timeline
+
+T1: alloc_page() → page allocated
+    _refcount = ___, _mapcount = ___
+
+T2: Page mapped into process A's page table
+    _refcount = ___, _mapcount = ___
+
+T3: fork() creates process B, same page shared
+    _refcount = ___, _mapcount = ___
+
+T4: Process A unmaps the page
+    _refcount = ___, _mapcount = ___
+
+T5: Process B unmaps the page
+    _refcount = ___, _mapcount = ___
+
+T6: Page freed
+    _refcount = ___, page returned to ___
+```
+
+### EXERCISE E: COMPOUND PAGE NAVIGATION
+
+```
+GIVEN: Compound page order=2 (4 pages), head at PFN 0x1000
+
+TASK:
+
+┌──────────┬──────────┬──────────┬──────────┐
+│ Page 0   │ Page 1   │ Page 2   │ Page 3   │
+│ PFN=___  │ PFN=___  │ PFN=___  │ PFN=___  │
+│ HEAD     │ TAIL     │ TAIL     │ TAIL     │
+└──────────┴──────────┴──────────┴──────────┘
+
+1. Head page PFN = 0x___
+2. compound_order = ___
+3. Tail page 1 compound_head = &head | 1 = ___
+4. From tail page 2, get head: compound_head & ~1 = ___
+5. Total size = 2^order × 4096 = ___ bytes
+```
+
+---
+
+## FAILURE PREDICTIONS
+
+```
+FAILURE 1: sizeof(struct page) varies, not always 64 → wrong offset
+FAILURE 2: Zone/node bit positions depend on config → extract wrong bits
+FAILURE 3: LSB=1 means anonymous, not LSB!=0 → confuse with movable
+FAILURE 4: _mapcount starts at -1, not 0 → off-by-one
+FAILURE 5: compound_head has bit 0 set in tail pages → must mask
+FAILURE 6: _refcount=0 doesn't mean immediate free, may be slab-owned
+```

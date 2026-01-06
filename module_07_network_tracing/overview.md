@@ -348,3 +348,103 @@ After completing Module 8, compare the copy count between socket and RDMA paths.
 [Module 8: RDMA Fundamentals →](../module_08_rdma/)
 
 [← Back to Course Index](../index.md)
+
+---
+
+## AXIOMATIC EXERCISES — BRUTE FORCE CALCULATION
+
+### EXERCISE A: SK_BUFF SIZE CALCULATION
+
+```
+GIVEN:
+  Ethernet header = 14 bytes
+  IP header = 20 bytes
+  UDP header = 8 bytes
+  Payload = 1000 bytes
+  headroom = 64 bytes
+  tailroom = 32 bytes
+
+TASK:
+
+1. Total data = ___ + ___ + ___ + ___ = ___ bytes
+2. Total buffer = headroom + data + tailroom = ___ + ___ + ___ = ___ bytes
+3. skb->len = ___ (data only, no head/tail room)
+4. skb->data - skb->head = ___ (headroom)
+5. skb->end - skb->tail = ___ (tailroom)
+```
+
+### EXERCISE B: COPY ADDRESS CORRELATION
+
+```
+GIVEN kprobe output:
+  [COPY1] sender PID=1234 dest=0xFFFF888112340050 len=13
+  [COPY4] receiver PID=1235 src=0xFFFF888112340050 len=13
+
+GIVEN userspace output:
+  sender: buffer at 0x7FFD12345000
+  receiver: buffer at 0x7FFE98765000
+
+TASK:
+
+1. COPY1: User VA ___ → Kernel VA ___
+2. COPY4: Kernel VA ___ → User VA ___
+3. Same kernel address? 0x___ = 0x___ → YES/NO
+4. Same user address? 0x___ = 0x___ → YES/NO
+5. Conclusion: ___ copies occurred
+```
+
+### EXERCISE C: COPY FUNCTION ARGUMENTS
+
+```
+_copy_from_iter(void *addr, size_t bytes, struct iov_iter *i)
+_copy_to_iter(const void *addr, size_t bytes, struct iov_iter *i)
+
+x86_64: arg1=RDI, arg2=RSI, arg3=RDX
+
+TASK: Extract from regs
+
+For _copy_from_iter:
+  1. dest (kernel buffer) = regs->___ = ___
+  2. len = regs->___ = ___
+  3. iter = regs->___ = ___
+
+For _copy_to_iter:
+  1. src (kernel buffer) = regs->___ = ___
+  2. len = regs->___ = ___
+  3. iter = regs->___ = ___
+
+GIVEN: regs->di=0xFFFF888112340000, regs->si=0x100, regs->dx=0xFFFF888198760000
+  kernel buffer = 0x___
+  length = ___ bytes = ___ decimal
+```
+
+### EXERCISE D: BANDWIDTH OVERHEAD
+
+```
+GIVEN:
+  Transfer 1GB of data
+  Each copy: CPU reads and writes each byte
+  Memory bandwidth: 50 GB/s
+
+TASK:
+
+1. Bytes copied in send path = 1GB (user→kernel)
+2. Bytes copied in recv path = 1GB (kernel→user)
+3. Total bytes moved by CPU = ___ + ___ = ___ GB
+4. Each copy = read + write = 2 × data size
+5. Total memory operations = ___ × 2 = ___ GB
+6. Time for copies = ___ GB / 50 GB/s = ___ seconds
+7. With RDMA (zero copy): ___ copies = ___ seconds overhead
+```
+
+---
+
+## FAILURE PREDICTIONS
+
+```
+FAILURE 1: skb->data is packet start, not buffer start → headroom calculation wrong
+FAILURE 2: Same kernel address for send/recv → loopback shares skb? Check carefully
+FAILURE 3: iter contains userspace info but is kernel struct → don't deref user pointers
+FAILURE 4: len in hex 0x100 = 256 decimal, not 100
+FAILURE 5: Forgetting each copy is read+write → 2x memory bandwidth
+```

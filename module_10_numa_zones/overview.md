@@ -339,3 +339,102 @@ Measure application performance with different NUMA policies:
 Congratulations on completing the Linux Kernel Training course.
 
 [← Back to Course Index](../index.md)
+
+---
+
+## AXIOMATIC EXERCISES — BRUTE FORCE CALCULATION
+
+### EXERCISE A: NUMA DISTANCE CALCULATION
+
+```
+GIVEN:
+  Local access latency = 80ns
+  Distance matrix:
+    node 0 to node 0: 10
+    node 0 to node 1: 21
+    node 1 to node 1: 10
+
+TASK:
+
+1. Distance 10 = local, baseline
+2. Node 0 → Node 1 distance = 21 = 2.1 × baseline
+3. Remote latency = 80ns × 2.1 = ___ ns
+4. Extra latency per remote access = ___ - 80 = ___ ns
+5. For 1 million remote accesses: extra time = ___ × 1000000 = ___ ms
+```
+
+### EXERCISE B: ZONE BOUNDARY CALCULATION
+
+```
+GIVEN: System with 64GB RAM
+
+TASK: Calculate zone boundaries
+
+1. ZONE_DMA: 0 - 16MB = 0 - 0x___ = ___ pages
+2. ZONE_DMA32: 16MB - 4GB = 0x___ - 0x___ = ___ pages
+3. ZONE_NORMAL: 4GB - 64GB = 0x___ - 0x___ = ___ pages
+4. Total pages = ___ + ___ + ___ = ___
+5. Verify: 64GB / 4KB = ___ pages ✓
+```
+
+### EXERCISE C: WATERMARK THRESHOLDS
+
+```
+GIVEN zone:
+  managed_pages = 1000000
+  min = 1% of managed = ___
+  low = min × 1.25 = ___
+  high = min × 1.5 = ___
+
+TASK:
+
+1. min watermark = 1000000 × 0.01 = ___ pages
+2. low watermark = ___ × 1.25 = ___ pages
+3. high watermark = ___ × 1.5 = ___ pages
+
+CURRENT: free_pages = 12000
+
+4. free_pages > high? ___ > ___ → kswapd sleeping? ___
+5. free_pages < low? ___ < ___ → kswapd wakes? ___
+6. free_pages < min? ___ < ___ → direct reclaim? ___
+```
+
+### EXERCISE D: NUMA POLICY EFFECT
+
+```
+GIVEN:
+  Application runs on CPU 3 (Node 0)
+  Node 0: 20GB free
+  Node 1: 30GB free
+
+TASK: Where does memory come from?
+
+With MPOL_LOCAL:
+1. Prefer node = current CPU's node = ___
+2. Allocate from node ___ first
+3. Fall back to node ___ if node 0 exhausted
+
+With MPOL_INTERLEAVE:
+1. Allocation 0 → node ___
+2. Allocation 1 → node ___
+3. Allocation 2 → node ___
+4. Pattern: round-robin
+
+With MPOL_BIND to node 1:
+1. All allocations → node ___
+2. Node 0 has 20GB free but → NOT USED
+3. If node 1 exhausted → OOM (not fallback!)
+```
+
+---
+
+## FAILURE PREDICTIONS
+
+```
+FAILURE 1: Distance 21 means 2.1× latency, not 21× → calculation error
+FAILURE 2: ZONE_DMA32 is 0-4GB, not 16MB-4GB only → includes DMA
+FAILURE 3: Watermarks are in PAGES not bytes → unit confusion
+FAILURE 4: MPOL_BIND does NOT fall back → can OOM with free memory elsewhere
+FAILURE 5: kswapd wakes at LOW, not MIN → direct reclaim only at MIN
+FAILURE 6: ZONE_NORMAL on 32-bit is DIFFERENT from 64-bit → config dependent
+```

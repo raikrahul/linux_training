@@ -337,3 +337,90 @@ Monitor how VMA count changes as you:
 [Module 10: NUMA & Zones →](../module_10_numa_zones/)
 
 [← Back to Course Index](../index.md)
+
+---
+
+## AXIOMATIC EXERCISES — BRUTE FORCE CALCULATION
+
+### EXERCISE A: VMA ADDRESS CONTAINMENT
+
+```
+GIVEN:
+  VMA: vm_start=0x7F00_0000_0000, vm_end=0x7F00_0001_0000
+
+TASK: For each address, is it in VMA?
+
+Rule: vm_start ≤ addr < vm_end
+
+1. addr=0x7F00_0000_0000: ___ ≤ ___ < ___ → YES/NO
+2. addr=0x7F00_0000_8000: ___ ≤ ___ < ___ → YES/NO
+3. addr=0x7F00_0000_FFFF: ___ ≤ ___ < ___ → YES/NO
+4. addr=0x7F00_0001_0000: ___ ≤ ___ < ___ → YES/NO (tricky!)
+5. addr=0x7EFF_FFFF_FFFF: ___ ≤ ___ < ___ → YES/NO
+
+TRICKY: vm_end is EXCLUSIVE
+```
+
+### EXERCISE B: VMA SIZE AND PAGE COUNT
+
+```
+GIVEN:
+  vm_start = 0x5555_5678_0000
+  vm_end   = 0x5555_5680_0000
+
+TASK:
+
+1. VMA size = vm_end - vm_start = 0x___ - 0x___ = 0x___ = ___ bytes
+2. 0x___ bytes = ___ KB = ___ MB
+3. Pages in VMA = size / 4096 = ___ / 4096 = ___
+4. If vm_pgoff = 0x100, first file page = ___ (256 × 4096 from file start)
+```
+
+### EXERCISE C: FIND_VMA BEHAVIOR
+
+```
+GIVEN VMAs (sorted by start):
+  VMA A: [0x1000, 0x2000)
+  VMA B: [0x3000, 0x4000)
+  VMA C: [0x5000, 0x6000)
+
+TASK: What does find_vma(mm, addr) return?
+
+find_vma returns VMA containing addr, OR first VMA after addr
+
+1. find_vma(mm, 0x1500) → VMA ___ (contains 0x1500)
+2. find_vma(mm, 0x2500) → VMA ___ (first after 0x2500)
+3. find_vma(mm, 0x0500) → VMA ___ (first after 0x0500)
+4. find_vma(mm, 0x6500) → ___ (no VMA after)
+5. find_vma(mm, 0x3000) → VMA ___ (vm_start = addr)
+```
+
+### EXERCISE D: VMA FLAGS DECODE
+
+```
+GIVEN: vm_flags = 0x00100073
+
+TASK: Extract permissions
+
+Binary: 0000 0000 0001 0000 0000 0000 0111 0011
+
+bit 0 (VM_READ)    = ___ → readable? ___
+bit 1 (VM_WRITE)   = ___ → writable? ___
+bit 2 (VM_EXEC)    = ___ → executable? ___
+bit 3 (VM_SHARED)  = ___ → shared? ___
+bit 8 (VM_GROWSDOWN) = ___ → stack? ___
+
+Permission string: ___-__ (like "rwxp" or "r--s")
+```
+
+---
+
+## FAILURE PREDICTIONS
+
+```
+FAILURE 1: vm_end is exclusive → addr=vm_end is NOT in VMA
+FAILURE 2: find_vma returns next VMA if addr not contained → not NULL
+FAILURE 3: Confusing vm_pgoff (in pages) with byte offset
+FAILURE 4: VM_SHARED bit 3, not bit 4 → wrong flag extraction
+FAILURE 5: Gaps between VMAs are UNMAPPED → access causes SIGSEGV
+```

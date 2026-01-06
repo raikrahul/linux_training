@@ -279,3 +279,96 @@ Compare latency distributions.
 [Module 9: Maple Tree & VMA →](../module_09_maple_tree/)
 
 [← Back to Course Index](../index.md)
+
+---
+
+## AXIOMATIC EXERCISES — BRUTE FORCE CALCULATION
+
+### EXERCISE A: MEMORY REGISTRATION CALCULATION
+
+```
+GIVEN:
+  Buffer size = 1GB = 1073741824 bytes
+  Page size = 4096 bytes
+  Each page needs physical address entry: 8 bytes
+
+TASK:
+
+1. Pages in buffer = ___ / 4096 = ___ pages
+2. Translation table size = ___ × 8 = ___ bytes = ___ MB
+3. If NIC can hold 1MB of translation entries:
+   Max registrable memory = 1MB / 8 × 4096 = ___ bytes = ___ GB
+```
+
+### EXERCISE B: QUEUE PAIR SIZING
+
+```
+GIVEN:
+  Max outstanding sends = 128
+  Max outstanding receives = 64
+  Each WQE (work queue entry) = 64 bytes
+  Each CQE (completion queue entry) = 32 bytes
+
+TASK:
+
+1. Send queue size = ___ × 64 = ___ bytes
+2. Receive queue size = ___ × 64 = ___ bytes
+3. Total QP size = ___ + ___ = ___ bytes = ___ KB
+4. CQ size for 128+64 completions = ___ × 32 = ___ bytes
+```
+
+### EXERCISE C: RDMA WRITE WORK REQUEST
+
+```
+GIVEN:
+  local_buffer = 0x7F00_0000_0000
+  local_lkey = 0x1234
+  remote_addr = 0x7F00_1000_0000
+  remote_rkey = 0x5678
+  length = 4096
+
+TASK: Fill ibv_send_wr structure
+
+struct ibv_sge sge = {
+    .addr = 0x___,
+    .length = ___,
+    .lkey = 0x___,
+};
+
+struct ibv_send_wr wr = {
+    .opcode = IBV_WR_RDMA___,
+    .sg_list = &sge,
+    .num_sge = ___,
+    .wr.rdma.remote_addr = 0x___,
+    .wr.rdma.rkey = 0x___,
+};
+```
+
+### EXERCISE D: LATENCY COMPARISON
+
+```
+GIVEN:
+  Socket send: 25μs
+  Socket recv: 25μs
+  RDMA post_send: 0.5μs
+  RDMA poll_cq: 0.5μs
+  Network RTT: 5μs
+
+TASK:
+
+Socket round-trip = ___ + ___ + ___ + ___ = ___ μs
+RDMA round-trip = ___ + ___ + ___ = ___ μs
+Speedup = ___ / ___ = ___×
+```
+
+---
+
+## FAILURE PREDICTIONS
+
+```
+FAILURE 1: Forgetting to register memory → NIC cannot DMA → fault
+FAILURE 2: Using wrong rkey → remote side rejects RDMA
+FAILURE 3: Buffer not page-aligned → registration may fail or be slow
+FAILURE 4: num_sge wrong → reading garbage scatter-gather entries
+FAILURE 5: Not polling CQ → completions lost, resources exhausted
+```

@@ -391,3 +391,112 @@ Create a kprobe that counts page faults per process.
 [Module 3: Memory Allocators →](../module_03_allocators/)
 
 [← Back to Course Index](../index.md)
+
+---
+
+## AXIOMATIC EXERCISES — BRUTE FORCE CALCULATION
+
+### EXERCISE A: ERROR CODE DECODE
+
+```
+GIVEN: error_code = 0x17
+
+TASK: Decode each bit
+
+1. 0x17 in binary = ___ ___ ___ ___ ___ (5 bits)
+2. bit[0] (P) = ___ → page present? ___
+3. bit[1] (W) = ___ → write access? ___
+4. bit[2] (U) = ___ → user mode? ___
+5. bit[3] (RSVD) = ___ → reserved bit violation? ___
+6. bit[4] (I) = ___ → instruction fetch? ___
+
+DESCRIBE FAULT: ________________________________
+```
+
+### EXERCISE B: FAULT ADDRESS FROM CR2
+
+```
+GIVEN:
+  CR2 = 0x7FFE_1234_5678
+  VMA: vm_start=0x7FFE_0000_0000, vm_end=0x7FFF_0000_0000
+
+TASK:
+
+1. Is address in VMA? vm_start ≤ CR2 < vm_end → ___ ≤ ___ < ___ → YES/NO
+2. Offset into VMA = CR2 - vm_start = ___ - ___ = ___
+3. Page offset = CR2 & 0xFFF = ___
+4. Page number within VMA = offset / 4096 = ___
+```
+
+### EXERCISE C: HANDLER CALL CHAIN
+
+```
+GIVEN: User writes to address 0x5555_5678_9000, first access, anonymous VMA
+
+TASK: Fill call chain
+
+1. CPU exception → exc_page_fault(regs, error_code=___)
+2. error_code bits: P=___ W=___ U=___ → demand paging / COW / protection?
+3. → do_user_addr_fault() → find_vma(mm, 0x5555_5678_9000) → VMA found?
+4. → handle_mm_fault(vma, addr, flags) → __handle_mm_fault()
+5. → handle_pte_fault() → PTE present? NO → do_anonymous_page() / do_fault()?
+6. → alloc_page(GFP_HIGHUSER) → returns struct page at ___
+7. → mk_pte(page, vm_page_prot) → creates PTE = ___
+8. → set_pte_at() → installs PTE in page table
+```
+
+### EXERCISE D: COPY-ON-WRITE CALCULATION
+
+```
+GIVEN:
+  Parent PTE[100] = 0x12345_003 (PA=0x12345000, flags=003=present+write)
+  fork() creates child, marks PTEs read-only
+  Child writes to page
+
+TASK:
+
+1. After fork, Parent PTE[100] = 0x12345_001 (write bit cleared) ✓
+2. After fork, Child PTE[100] = 0x12345_001 (same PA, read-only) ✓
+3. page->_refcount = 2 (shared between parent and child)
+4. Child writes → error_code = ___ (P=1, W=1, U=1) = 0x___
+5. do_wp_page() checks: page_count(page) = ___ → must copy? YES/NO
+6. New page allocated at PA = 0xABCDE000
+7. copy_user_highpage(new, old) → copies 4096 bytes
+8. Child PTE[100] = 0xABCDE_003 (new PA, writable)
+9. Old page->_refcount = ___ (decremented)
+```
+
+### EXERCISE E: KPROBE ARGUMENT EXTRACTION
+
+```
+GIVEN: kprobe on handle_mm_fault
+  handle_mm_fault(struct vm_area_struct *vma, unsigned long addr, unsigned int flags, struct pt_regs *regs)
+
+x86_64 ABI:
+  arg1 = RDI, arg2 = RSI, arg3 = RDX, arg4 = RCX
+
+TASK: Map registers to arguments
+
+1. vma pointer = regs->___ = (struct vm_area_struct *)regs->___
+2. address = regs->___ = ___
+3. flags = regs->___ = ___
+4. pt_regs = regs->___ = ___
+
+GIVEN: regs->di = 0xFFFF8881_12340000, regs->si = 0x7FFE_5678_9000
+
+5. vma = ___
+6. faulting address = ___
+```
+
+---
+
+## FAILURE PREDICTIONS
+
+```
+FAILURE 1: error_code bit order wrong → misidentify fault type
+FAILURE 2: Forgetting vm_end is exclusive → incorrectly say address not in VMA
+FAILURE 3: Confusing P=0 (not present) with P=1 (protection fault)
+FAILURE 4: x86_64 ABI: arg order RDI,RSI,RDX,RCX,R8,R9 → not RAX,RBX,RCX
+FAILURE 5: COW page shared → refcount > 1 → must copy, not just make writable
+FAILURE 6: After fork, PTEs point to SAME physical page, not copied
+```
