@@ -500,3 +500,140 @@ FAILURE 4: x86_64 ABI: arg order RDI,RSI,RDX,RCX,R8,R9 → not RAX,RBX,RCX
 FAILURE 5: COW page shared → refcount > 1 → must copy, not just make writable
 FAILURE 6: After fork, PTEs point to SAME physical page, not copied
 ```
+
+---
+
+## W-QUESTIONS — NUMERICAL ANSWERS
+
+### WHAT: Error Code
+```
+error_code = 0x7 = 0b00111
+bit[0]=1 → page present (protection fault, not absent)
+bit[1]=1 → write access attempted
+bit[2]=1 → user mode
+∴ User tried to write to present read-only page → COW fault
+```
+
+### WHY: Not Map at malloc
+```
+malloc(1GB) → returns VA 0x7F0000000000
+Pages allocated at malloc? 0 pages
+First write triggers fault → 1 page allocated
+1GB / 4KB = 262144 page faults if fully used
+Lazy allocation saves: 262144 × 4KB = 1GB RAM if never touched
+```
+
+### WHERE: Fault Handler Lives
+```
+IDT[14] → exc_page_fault at 0xFFFFFFFF812A0000
+CR2 loaded with faulting address by CPU
+Kernel stack at 0xFFFF888100001000
+Handler reads CR2: asm("mov %%cr2, %0" : "=r"(addr))
+```
+
+### WHO: Triggers Fault
+```
+Process PID=1234 with mm→pgd at 0x12340000
+VMA at [0x7F0000000000, 0x7F0000100000)
+Instruction at RIP=0x401234 does: MOV [0x7F0000050000], RAX
+PTE for 0x7F0000050000 = 0 (not present)
+→ CPU raises fault, kernel handles for PID 1234
+```
+
+### WHEN: Different Fault Types
+```
+T₁: malloc(4096), ptr=0x555555555000, no fault
+T₂: ptr[0] = 'A' → fault, error_code=0x6 (P=0,W=1,U=1), do_anonymous_page()
+T₃: fork(), child PTE marked read-only
+T₄: child writes ptr[0] = 'B' → fault, error_code=0x7 (P=1,W=1,U=1), do_wp_page()
+```
+
+### WITHOUT: No Demand Paging
+```
+Process needs 1GB heap
+Without demand paging: allocate 1GB immediately
+  = 262144 pages × alloc_page() = 262144 calls
+  = 262144 × 4096 bytes zeroed
+Time: 262144 × 500ns = 131ms at startup
+
+With demand paging: 0 pages at malloc, fault as needed
+Startup time: ~0ms
+Only pay for pages actually touched
+```
+
+### WHICH: Handler Path
+```
+error_code & 1 = 0 → not present → do_anonymous_page() OR do_fault()
+error_code & 1 = 1 → present → do_wp_page() (COW)
+error_code & 2 = 0 → read fault
+error_code & 2 = 2 → write fault
+error_code & 4 = 0 → kernel mode
+error_code & 4 = 4 → user mode
+```
+
+---
+
+## ANNOYING CALCULATIONS — BREAKDOWN
+
+### Annoying: Error Code Bits
+```
+error_code = 0x15 = 0b10101
+bit0 = 1 → P=1 (present)
+bit1 = 0 → W=0 (read)
+bit2 = 1 → U=1 (user)
+bit3 = 0 → RSVD=0
+bit4 = 1 → I=1 (instruction fetch)
+∴ User tried to execute from present non-executable page
+```
+
+### Annoying: VMA Boundary Check
+```
+CR2 = 0x7FFE_FFFF_FFFF
+VMA: vm_start=0x7FFE_0000_0000, vm_end=0x7FFF_0000_0000
+Check: 0x7FFE_0000_0000 ≤ 0x7FFE_FFFF_FFFF < 0x7FFF_0000_0000
+       0x7FFE_0000_0000 ≤ 0x7FFE_FFFF_FFFF ✓
+       0x7FFE_FFFF_FFFF < 0x7FFF_0000_0000 ✓
+∴ Address IS in VMA
+```
+
+### Annoying: Page Offset from VMA Start
+```
+CR2 = 0x7FFE_1234_5678
+VMA starts at 0x7FFE_0000_0000
+Offset = 0x7FFE_1234_5678 - 0x7FFE_0000_0000 = 0x1234_5678 = 305419896 bytes
+Page number = 305419896 / 4096 = 74565 (floor)
+Page offset = 305419896 % 4096 = 1656 bytes into page
+```
+
+### Annoying: Refcount After Fork
+```
+Before fork: page refcount = 1
+After fork: parent refs + child refs = 1 + 1 = 2
+mapcount: parent PTE + child PTE = 2 mappings
+Child COW write:
+  - new page refcount = 1
+  - old page refcount = 2 - 1 = 1
+```
+
+---
+
+## ATTACK PLAN
+
+```
+1. Decode error_code bit-by-bit: bit0=P, bit1=W, bit2=U, bit3=RSVD, bit4=I
+2. Check VMA containment: start ≤ addr < end (end exclusive!)
+3. Calculate page offset: (addr - vm_start) / 4096
+4. On fork: refcount → refcount+1, mark PTEs read-only
+5. On COW: allocate new page, copy 4096 bytes, update child PTE
+```
+
+---
+
+## ADDITIONAL FAILURE PREDICTIONS
+
+```
+FAILURE 7: P=1 means protection fault, NOT that page allocation is needed
+FAILURE 8: error_code=0x6 vs 0x7 → one bit difference changes entire path
+FAILURE 9: VMA end is exclusive → addr=vm_end is OUTSIDE VMA
+FAILURE 10: Must copy page data, not just update PTE → 4096 bytes moved
+```

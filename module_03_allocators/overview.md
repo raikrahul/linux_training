@@ -586,3 +586,132 @@ FAILURE 4: kmalloc(4097) needs order-1 via alloc_pages, not slab
 FAILURE 5: GFP_KERNEL in interrupt context → deadlock
 FAILURE 6: Internal fragmentation percentage = waste/allocated, not waste/requested
 ```
+
+---
+
+## W-QUESTIONS — NUMERICAL ANSWERS
+
+### WHAT: Buddy Block
+```
+Order-3 block = 2^3 = 8 contiguous pages
+8 pages × 4096 bytes = 32768 bytes = 32KB
+PFN range: if starts at PFN 0x1000, contains PFN [0x1000, 0x1007]
+Physical address range: 0x1000000 to 0x1007FFF (32KB)
+```
+
+### WHY: Power of 2
+```
+Split order-3 into two order-2:
+32KB → 16KB + 16KB (even split)
+If not power of 2 (say 24KB):
+24KB → 12KB + 12KB? No standard order!
+Powers of 2 allow binary splitting
+2^10 = 1024, 2^11 = 2048, no 1536
+```
+
+### WHERE: Free Lists
+```
+Zone NORMAL at node 0:
+  free_area[0]: 1234 free order-0 pages
+  free_area[1]: 567 free order-1 blocks
+  free_area[10]: 3 free order-10 blocks
+Each block in linked list at zone->free_area[order].free_list
+```
+
+### WHO: Calls Allocator
+```
+alloc_pages(GFP_KERNEL, 2) → kernel module requests order-2
+kmalloc(100, GFP_KERNEL) → slab layer requests order-0
+do_anonymous_page() → page fault requests order-0
+vmalloc(1MB) → requests 256 order-0 pages non-contiguous
+```
+
+### WHEN: Split Happens
+```
+Request order-2 (16KB)
+free_area[2] empty, free_area[3] has 1 block
+T₁: remove block from free_area[3]
+T₂: split into two order-2 blocks
+T₃: return first order-2, add second to free_area[2]
+```
+
+### WITHOUT: No Coalescing
+```
+Allocate 1000 order-0 pages, free all
+Without coalesce: 1000 order-0 entries in free list
+With coalesce: buddies merge → fewer larger blocks
+Request order-5? Without coalesce: FAIL (no 32-page block)
+With coalesce: SUCCEED (buddies merged to order-5)
+```
+
+### WHICH: Buddy Address
+```
+PFN = 0x1234, order = 2
+Buddy = PFN XOR (1 << order) = 0x1234 XOR 0x4 = 0x1230
+Check: 0x1230 XOR 0x4 = 0x1234 ✓ (mutual buddies)
+0x1234 binary: 0001 0010 0011 0100
+0x4 binary:    0000 0000 0000 0100
+XOR:           0001 0010 0011 0000 = 0x1230
+```
+
+---
+
+## ANNOYING CALCULATIONS — BREAKDOWN
+
+### Annoying: Order from Size
+```
+Request 13000 bytes
+Pages = ceil(13000 / 4096) = ceil(3.17) = 4 pages
+Order = ceil(log2(4)) = 2
+Actual = 2^2 × 4096 = 16384 bytes
+Waste = 16384 - 13000 = 3384 bytes = 20.7%
+```
+
+### Annoying: Slab Math
+```
+Object size = 200 bytes
+Page = 4096 bytes, metadata = 0 bytes (external)
+Objects per slab = floor(4096 / 200) = floor(20.48) = 20
+Used = 20 × 200 = 4000 bytes
+Waste = 4096 - 4000 = 96 bytes = 2.3%
+```
+
+### Annoying: kmalloc Size Class
+```
+Request 65 bytes
+Classes: 8, 16, 32, 64, 128, 256...
+Smallest ≥ 65 is 128
+Actual = 128 bytes
+Waste = 128 - 65 = 63 bytes = 49.2%
+```
+
+### Annoying: Buddy Split Count
+```
+Have order-6 only, need order-2
+Splits: 6→5, 5→4, 4→3, 3→2
+Count = 6 - 2 = 4 splits
+After: 1 order-2 (returned), 1 each of order-5,4,3,2 (in free lists)
+```
+
+---
+
+## ATTACK PLAN
+
+```
+1. Size → pages: ceil(size / 4096)
+2. Pages → order: ceil(log2(pages))
+3. Order → actual: 2^order × 4096
+4. Buddy: PFN XOR (1 << order)
+5. Split count = have_order - need_order
+```
+
+---
+
+## ADDITIONAL FAILURE PREDICTIONS
+
+```
+FAILURE 7: ceil(3.17) = 4, not 3 → undercounting pages
+FAILURE 8: log2(5) = 2.32 → need order 3, not 2
+FAILURE 9: Order-10 is MAX on most systems → 4MB max contiguous
+FAILURE 10: GFP_KERNEL in interrupt → deadlock, use GFP_ATOMIC
+```

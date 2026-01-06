@@ -447,3 +447,124 @@ FAILURE 3: mlock locks PAGES not bytes → boundary alignment matters
 FAILURE 4: _mapcount=-1 means not mapped, not refcount=0
 FAILURE 5: Inactive list is larger than active → more reclaim candidates
 ```
+
+---
+
+## W-QUESTIONS — NUMERICAL ANSWERS
+
+### WHAT: LRU Lists
+```
+5 LRU lists per node:
+  LRU_INACTIVE_ANON: 150000 pages = 585MB
+  LRU_ACTIVE_ANON: 50000 pages = 195MB
+  LRU_INACTIVE_FILE: 70000 pages = 273MB
+  LRU_ACTIVE_FILE: 30000 pages = 117MB
+  LRU_UNEVICTABLE: 1000 pages = 3.9MB (mlocked)
+Total tracked: 301000 pages = 1.17GB
+```
+
+### WHY: Two LRU Lists per Type
+```
+Single list: scan all 200000 pages to find cold
+Active/Inactive split:
+  Active: 50000 hot pages, skip all
+  Inactive: 150000 cold pages, scan these
+Efficiency: scan 150000 instead of 200000 = 25% saved
+```
+
+### WHERE: Page Cache Index
+```
+File: /tmp/data, size = 1MB
+Page cache entries:
+  index 0 → page at offset 0
+  index 1 → page at offset 4096
+  index 255 → page at offset 255×4096 = 1044480
+Read at byte 100000:
+  index = floor(100000 / 4096) = 24
+  offset in page = 100000 % 4096 = 1696
+```
+
+### WHO: Reclaims Pages
+```
+kswapd0: kernel thread, wakes at low watermark
+  Scans inactive lists, frees clean pages, writes dirty
+Direct reclaim: process that triggered low memory
+  __alloc_pages_slowpath() → __perform_reclaim()
+OOM killer: last resort, kills process with highest score
+```
+
+### WHEN: Page Moves Between Lists
+```
+T₁: New page → inactive list (PG_lru=1, PG_active=0)
+T₂: Page accessed → PG_referenced=1 (not moved yet)
+T₃: kswapd scans, sees referenced → move to active
+T₄: No access → age out → PG_active=0, move to inactive
+T₅: Still no access → reclaim candidate → free or swap
+```
+
+### WITHOUT: No Page Cache
+```
+Read 1000 × 4KB from same file:
+  Without cache: 1000 disk reads × 5ms = 5000ms
+  With cache: 1 disk read + 999 cache hits × 100ns = 5ms + 0.1ms
+Speedup: 5000ms / 5.1ms = 980×
+```
+
+### WHICH: mlock Flags
+```
+VM_LOCKED = 0x00002000
+VMA with vm_flags & VM_LOCKED = 1 → pages in LRU_UNEVICTABLE
+mlock(ptr, 4096):
+  Pages = ceil(4096 / 4096) = 1
+  1 page moves to unevictable list
+  Cannot be swapped, cannot be dropped
+```
+
+---
+
+## ANNOYING CALCULATIONS — BREAKDOWN
+
+### Annoying: Active Ratio
+```
+active_anon = 50000, inactive_anon = 150000
+ratio = 50000 / (50000 + 150000) = 50000 / 200000 = 0.25 = 25%
+Target ratio often ~50%, system is cold
+```
+
+### Annoying: Page Cache Size from /proc/meminfo
+```
+Cached: 3145728 kB = 3145728 / 4 = 786432 pages
+Dirty: 12345 kB = 3087 pages
+Clean in cache = 786432 - 3087 = 783345 pages
+```
+
+### Annoying: mlock Range
+```
+ptr = 0x7F0000001234, size = 100000 bytes
+Start page = floor(0x7F0000001234 / 4096) = page at VA 0x7F0000001000
+End addr = 0x7F0000001234 + 100000 = 0x7F00000199D4
+End page = page containing 0x7F00000199D4 = 0x7F0000019000
+Pages = (0x7F0000019000 - 0x7F0000001000) / 4096 + 1 = 25 pages
+```
+
+---
+
+## ATTACK PLAN
+
+```
+1. LRU type from flags: PG_active, PG_lru, PG_unevictable
+2. File page index = byte_offset / 4096
+3. Reclaim order: inactive_file → inactive_anon → active
+4. mlock pages = ceil((ptr_end - page_start) / 4096)
+```
+
+---
+
+## ADDITIONAL FAILURE PREDICTIONS
+
+```
+FAILURE 7: mlock aligns to page boundaries → more pages than expected
+FAILURE 8: Dirty pages need writeback before free → can't instant reclaim
+FAILURE 9: Active ratio too low → system is memory-cold, lots of cold data
+FAILURE 10: PG_referenced alone doesn't move page → needs kswapd scan
+```

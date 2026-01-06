@@ -424,3 +424,137 @@ FAILURE 3: Confusing vm_pgoff (in pages) with byte offset
 FAILURE 4: VM_SHARED bit 3, not bit 4 → wrong flag extraction
 FAILURE 5: Gaps between VMAs are UNMAPPED → access causes SIGSEGV
 ```
+
+---
+
+## W-QUESTIONS — NUMERICAL ANSWERS
+
+### WHAT: VMA Structure
+```
+VMA at 0xFFFF888112340000:
+  vm_start = 0x7F00_0000_0000
+  vm_end = 0x7F00_0010_0000
+  Size = 0x10_0000 = 1MB = 256 pages
+  vm_flags = 0x73 = rwxp
+  vm_file = 0xFFFF888198765000 (mapped file)
+  vm_pgoff = 0x100 (file offset = 256 × 4KB = 1MB)
+```
+
+### WHY: Maple Tree Not RB-Tree
+```
+RB-tree lookup: follow left/right pointers
+  Each step = 1 cache miss = 100ns
+  Depth 20 = 2μs lookup
+
+Maple tree: B-tree style, multiple entries per node
+  Node fits in cache line (64 bytes)
+  Depth 4 = 400ns lookup
+  5× faster for large trees
+```
+
+### WHERE: VMA Stored
+```
+mm->mm_mt = maple tree root
+Node at 0xFFFF888112350000:
+  Pivots: [0x7F00_0000, 0x7F00_0100, 0x7F00_0200]
+  Slots: [VMA0, VMA1, VMA2, NULL]
+Address 0x7F00_0150:
+  > pivot[0], < pivot[1] → slot[1] = VMA1
+```
+
+### WHO: Modifies VMAs
+```
+mmap() → allocate new VMA, insert into maple tree
+munmap() → remove VMA from maple tree
+mprotect() → may split VMA (1 VMA → 3 VMAs)
+fork() → duplicate all VMAs for child
+brk() → extend heap VMA's vm_end
+```
+
+### WHEN: VMA Lookup
+```
+Page fault at 0x7F00_0050_1234:
+T₁: find_vma(mm, 0x7F00_0050_1234)
+T₂: Maple tree walk: root → internal → leaf
+T₃: Return VMA with start ≤ addr
+T₄: Check addr < vm_end? YES → valid
+T₅: Check vm_flags for WRITE → allowed?
+```
+
+### WITHOUT: No VMA
+```
+Every virtual address valid? No security!
+Without VMA:
+  - Cannot distinguish stack from heap
+  - Cannot enforce read/write/exec permissions
+  - Cannot track file mappings
+Process isolation impossible
+```
+
+### WHICH: VMA Lookup Returns
+```
+find_vma(mm, addr) returns:
+  - VMA containing addr (if vm_start ≤ addr < vm_end)
+  - First VMA after addr (if in gap)
+  - NULL (if addr beyond all VMAs)
+
+Example: VMAs at [0x1000,0x2000), [0x3000,0x4000)
+  find_vma(0x1500) → VMA1 (contains)
+  find_vma(0x2500) → VMA2 (next after gap)
+  find_vma(0x5000) → NULL
+```
+
+---
+
+## ANNOYING CALCULATIONS — BREAKDOWN
+
+### Annoying: VMA Page Count
+```
+vm_start = 0x7FFE_1234_0000
+vm_end = 0x7FFE_1236_8000
+size = 0x7FFE_1236_8000 - 0x7FFE_1234_0000 = 0x28000 = 163840 bytes
+pages = 163840 / 4096 = 40 pages
+```
+
+### Annoying: Check Address in VMA
+```
+addr = 0x7FFE_1235_FFFF
+vm_start = 0x7FFE_1234_0000
+vm_end = 0x7FFE_1236_0000
+Check: 0x7FFE_1234_0000 ≤ 0x7FFE_1235_FFFF < 0x7FFE_1236_0000
+  0x7FFE_1234_0000 ≤ 0x7FFE_1235_FFFF ✓
+  0x7FFE_1235_FFFF < 0x7FFE_1236_0000 ✓
+∴ Address IS in VMA
+```
+
+### Annoying: Hole Detection
+```
+VMA1: [0x1000, 0x2000)
+VMA2: [0x3000, 0x4000)
+Hole at [0x2000, 0x3000)
+Size = 0x3000 - 0x2000 = 0x1000 = 4KB = 1 page hole
+Access 0x2500 → find_vma returns VMA2, but 0x2500 < 0x3000 → FAULT!
+```
+
+---
+
+## ATTACK PLAN
+
+```
+1. find_vma(mm, addr) to get VMA
+2. Check addr >= vma->vm_start
+3. Check addr < vma->vm_end
+4. Both true → address valid in VMA
+5. Else →SegFault or hole
+```
+
+---
+
+## ADDITIONAL FAILURE PREDICTIONS
+
+```
+FAILURE 7: find_vma returns NEXT vma, not NULL, if in gap
+FAILURE 8: Must check both start AND end → vm_end is exclusive
+FAILURE 9: vm_pgoff in pages, not bytes → multiply by 4096
+FAILURE 10: mprotect may split VMA → original VMA pointer invalidated
+```

@@ -372,3 +372,126 @@ FAILURE 3: Buffer not page-aligned → registration may fail or be slow
 FAILURE 4: num_sge wrong → reading garbage scatter-gather entries
 FAILURE 5: Not polling CQ → completions lost, resources exhausted
 ```
+
+---
+
+## W-QUESTIONS — NUMERICAL ANSWERS
+
+### WHAT: Memory Registration
+```
+ibv_reg_mr(pd, buf, 1GB, flags) returns:
+  mr->lkey = 0x1234 (local key for local operations)
+  mr->rkey = 0x5678 (remote key for RDMA WRITE/READ)
+Internal: 1GB / 4KB = 262144 pages pinned
+Translation table: 262144 × 8 = 2MB NIC memory used
+```
+
+### WHY: Pin Pages
+```
+Socket: page can swap during transfer → copy to kernel first
+RDMA: NIC DMAs directly from user buffer
+If page swaps: NIC reads wrong data (or crashes)
+Pin = guarantee physical address stable
+262144 pages pinned = 1GB RAM unswappable
+```
+
+### WHERE: Queue Lives
+```
+QP created in user-mapped NIC memory:
+  Send Queue at 0x7F00_0000_0000 (user VA)
+  Recv Queue at 0x7F00_0001_0000 (user VA)
+  CQ at 0x7F00_0002_0000 (user VA)
+Doorbell register: write to notify NIC of new WR
+```
+
+### WHO: Moves Data
+```
+Socket: CPU executes memcpy from/to kernel
+RDMA: NIC DMA engine moves data
+RDMA WRITE: local NIC → remote RAM (remote CPU idle)
+RDMA READ: remote RAM → local NIC → local RAM
+CPU involvement: 0 for data, only for posting WRs
+```
+
+### WHEN: Completion Generated
+```
+T₁: ibv_post_send(qp, wr) → WR in send queue
+T₂: NIC processes WR → DMA starts
+T₃: DMA completes → NIC generates CQE
+T₄: ibv_poll_cq(cq, 1, &wc) → wc.status = IBV_WC_SUCCESS
+Latency: T₄ - T₁ = 1-2 μs for small message
+```
+
+### WITHOUT: No RDMA
+```
+1μs RDMA latency vs 25μs socket latency
+25× faster per operation
+1 million ops/sec:
+  Socket: 1M × 25μs = 25 seconds CPU time
+  RDMA: 1M × 1μs = 1 second, but offloaded to NIC
+```
+
+### WHICH: Operation Type
+```
+IBV_WR_SEND = 0: push to remote recv buffer
+IBV_WR_RDMA_WRITE = 1: write to remote memory
+IBV_WR_RDMA_READ = 2: read from remote memory
+IBV_WR_ATOMIC_CMP_AND_SWP = 3: atomic compare-swap
+WRITE/READ: remote CPU unaware, memory directly accessed
+```
+
+---
+
+## ANNOYING CALCULATIONS — BREAKDOWN
+
+### Annoying: Registration Table Size
+```
+Buffer = 16GB
+Pages = 16GB / 4KB = 4194304 pages
+Entry size = 8 bytes (PA per page)
+Table = 4194304 × 8 = 33554432 bytes = 32MB
+NIC SRAM typically 16MB → cannot register 16GB in one MR!
+```
+
+### Annoying: Work Request Posting
+```
+WR addr = 0x7F0000001000
+sge.addr = 0x7F0000002000 (data buffer)
+sge.length = 4096
+sge.lkey = 0x1234
+Door bell write at T₀
+NIC reads WR at T₁ = T₀ + 100ns
+DMA starts at T₂ = T₁ + 50ns
+```
+
+### Annoying: Poll CQ
+```
+while (ibv_poll_cq(cq, 1, &wc) == 0) → spin
+Return 1 → one completion
+wc.status = 0 → success
+wc.status = 5 → remote access error
+wc.wr_id = user-provided ID for matching
+```
+
+---
+
+## ATTACK PLAN
+
+```
+1. ibv_reg_mr: pin pages, get lkey/rkey
+2. Exchange rkey/raddr with remote via sockets
+3. ibv_post_send with RDMA_WRITE
+4. ibv_poll_cq until completion
+5. Check wc.status == IBV_WC_SUCCESS
+```
+
+---
+
+## ADDITIONAL FAILURE PREDICTIONS
+
+```
+FAILURE 7: rkey valid only for that specific MR → wrong rkey = error
+FAILURE 8: Forgot to post recv buffer → SEND fails with RNR
+FAILURE 9: Registration table size limit → large MR fails
+FAILURE 10: Page must be pinned entire time → munmap breaks RDMA
+```

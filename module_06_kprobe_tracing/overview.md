@@ -460,3 +460,125 @@ FAILURE 4: Sleeping in handler (atomic context) → deadlock
 FAILURE 5: printk without ratelimit → log flood, performance drop
 FAILURE 6: regs->di is arg1, regs->ax is return value → confusion
 ```
+
+---
+
+## W-QUESTIONS — NUMERICAL ANSWERS
+
+### WHAT: Kprobe Mechanism
+```
+Original instruction at 0xFFFF8812A5678: push rbp (0x55)
+After register_kprobe: int3 (0xCC) at 0xFFFF8812A5678
+CPU hits 0xCC → trap to handler
+Handler runs, single-step 0x55, return
+Overhead: ~1-2 μs per probe hit
+```
+
+### WHY: Use Kprobe Not Printk
+```
+Modify source + recompile: 30 minutes
+Insert kprobe module: 30 seconds
+Debug production system: recompile impossible
+Kprobe: dynamic, no reboot, removable
+Probe count in 1 second: 100000+ calls traceable
+```
+
+### WHERE: pt_regs Layout
+```
+Address 0xFFFF888100001000 is pt_regs pointer
+regs->di at offset 0x70 → 0xFFFF888100001070
+regs->si at offset 0x68 → 0xFFFF888100001068
+regs->ip at offset 0x80 → 0xFFFF888100001080
+regs->sp at offset 0x98 → 0xFFFF888100001098
+```
+
+### WHO: Handler Context
+```
+Handler runs in: interrupt context (cannot sleep!)
+current->pid = process that triggered probe
+current->comm = "my_program" (16 char max)
+GFP allowed: GFP_ATOMIC only
+Cannot call: mutex_lock, kmalloc(GFP_KERNEL), msleep
+```
+
+### WHEN: Probe Fires
+```
+Probe on handle_mm_fault
+T₁: Process A faults → handler called with A's regs
+T₂: Process B faults → handler called with B's regs
+T₃: Interrupt occurs → handler may run in interrupt
+Filter: if (strcmp(current->comm, "target") != 0) return 0;
+```
+
+### WITHOUT: No Kprobe
+```
+Debug page fault path:
+  Without kprobe: add printk to 15 kernel files
+  Recompile: 5 minutes, reboot: 2 minutes
+  Remove debug: edit 15 files again
+With kprobe: 1 module, insmod, rmmod
+  Development cycle: 30 seconds vs 7 minutes = 14× faster
+```
+
+### WHICH: Register for Argument
+```
+Function: foo(int a, long b, void *c, int d)
+a = regs->di (truncated to 32-bit)
+b = regs->si (full 64-bit)
+c = regs->dx (pointer)
+d = regs->cx (truncated to 32-bit)
+Arg 5 = regs->r8
+Arg 6 = regs->r9
+Arg 7+ = on stack at regs->sp + offset
+```
+
+---
+
+## ANNOYING CALCULATIONS — BREAKDOWN
+
+### Annoying: Struct Pointer Offset
+```
+struct task_struct *task = current
+task->pid at offset 0x4E8 in task_struct
+pid_ptr = (char *)task + 0x4E8
+pid = *(int *)pid_ptr
+If task = 0xFFFF888112340000, pid at 0xFFFF8881123404E8
+```
+
+### Annoying: Return Value from Kretprobe
+```
+regs_return_value(regs) on x86_64 = regs->ax
+If function returns -EINVAL = -22 = 0xFFFFFFFFFFFFFFEA
+Check: regs->ax == 0xFFFFFFFFFFFFFFEA → error returned
+```
+
+### Annoying: Count Rate Limit
+```
+printk_ratelimit: max 10 messages per 5 seconds
+1000 faults/sec × 5 sec = 5000 calls
+Only 10 printed, 4990 suppressed = 99.8% dropped
+Solution: count in handler, print summary on unload
+```
+
+---
+
+## ATTACK PLAN
+
+```
+1. Identify function signature → map args to registers
+2. Set kp.symbol_name → register_kprobe
+3. In handler: check current->comm, extract regs->di/si/dx
+4. Use printk_ratelimit or counter
+5. rmmod to remove, check dmesg
+```
+
+---
+
+## ADDITIONAL FAILURE PREDICTIONS
+
+```
+FAILURE 7: regs->di is 64-bit, but int arg uses only low 32 bits
+FAILURE 8: Arg 7+ on stack, not in registers → different extraction
+FAILURE 9: current valid only in process context, not hardirq
+FAILURE 10: String compare: strcmp(current->comm, name) → max 15 chars!
+```

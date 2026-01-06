@@ -448,3 +448,129 @@ FAILURE 3: iter contains userspace info but is kernel struct → don't deref use
 FAILURE 4: len in hex 0x100 = 256 decimal, not 100
 FAILURE 5: Forgetting each copy is read+write → 2x memory bandwidth
 ```
+
+---
+
+## W-QUESTIONS — NUMERICAL ANSWERS
+
+### WHAT: sk_buff Data Layout
+```
+skb->head = 0xFFFF888112340000
+skb->data = 0xFFFF888112340040 (64 byte headroom)
+skb->tail = 0xFFFF888112340440 (1024 bytes data)
+skb->end = 0xFFFF888112340500 (192 byte tailroom)
+skb->len = 1024 bytes
+Total buffer = 0x500 bytes = 1280 bytes
+```
+
+### WHY: Headroom Exists
+```
+Packet arrives with Ethernet+IP+UDP headers
+Headroom allows prepending:
+  - Add new header: skb_push(skb, 20) → data -= 20
+  - Without headroom: allocate new buffer, copy all → slow
+64 byte headroom = space for ~4 additional headers
+```
+
+### WHERE: Copy Functions
+```
+_copy_from_iter at 0xFFFFFFFF815A1234
+_copy_to_iter at 0xFFFFFFFF815A1500
+Net stack calls these, not raw copy_from_user
+iter describes scatter-gather list of user buffers
+```
+
+### WHO: Initiates Copy
+```
+sendto() syscall → sock_sendmsg → udp_sendmsg
+  → _copy_from_iter (user buf → skb)
+recvfrom() syscall → sock_recvmsg → udp_recvmsg
+  → _copy_to_iter (skb → user buf)
+PID 1234 calls sendto → kernel copies on behalf of 1234
+```
+
+### WHEN: Each Copy Happens
+```
+T₁: User calls send(fd, buf, 1000)
+T₂: Kernel allocates skb, COPY #1 from buf to skb->data
+T₃: NIC DMA reads skb->data to wire (no CPU)
+T₄: Remote NIC DMA writes to skb->data (no CPU)
+T₅: User calls recv(fd, buf, 1000)
+T₆: Kernel COPY #4 from skb->data to user buf
+```
+
+### WITHOUT: Zero-Copy
+```
+1GB transfer with copies:
+  COPY #1: 1GB read + 1GB write = 2GB memory ops
+  COPY #4: 1GB read + 1GB write = 2GB memory ops
+  Total: 4GB memory operations
+  At 50GB/s: 4GB / 50GB/s = 80ms overhead
+
+With RDMA (zero-copy):
+  DMA: 1GB NIC→RAM (no CPU)
+  Total: 0 CPU copy overhead
+```
+
+### WHICH: Function for Direction
+```
+Send path: _copy_from_iter (user → kernel)
+  regs->di = kernel dest, regs->si = length
+Recv path: _copy_to_iter (kernel → user)  
+  regs->di = kernel src, regs->si = length
+Check comm: "sender" for COPY#1, "receiver" for COPY#4
+```
+
+---
+
+## ANNOYING CALCULATIONS — BREAKDOWN
+
+### Annoying: Packet Size with Headers
+```
+User payload = 1000 bytes
+UDP header = 8 bytes
+IP header = 20 bytes
+Ethernet header = 14 bytes
+Total on wire = 1000 + 8 + 20 + 14 = 1042 bytes
+With CRC (4 bytes) = 1046 bytes
+```
+
+### Annoying: skb Pointer Math
+```
+skb->data = 0xFFFF888112340040
+Network header at data + 14 (after Ethernet)
+IP header addr = 0xFFFF888112340040 + 0xE = 0xFFFF88811234004E
+UDP header at IP + 20 = 0xFFFF88811234004E + 0x14 = 0xFFFF888112340062
+Payload at UDP + 8 = 0xFFFF888112340062 + 8 = 0xFFFF88811234006A
+```
+
+### Annoying: Bandwidth vs CPU
+```
+100 Gbps = 12.5 GB/s wire speed
+Copy overhead at 50% CPU: only 6.25 GB/s effective
+100 Gbps NIC, but CPU bottleneck = 50 Gbps actual
+RDMA NIC: 100% wire speed, 0% CPU for data path
+```
+
+---
+
+## ATTACK PLAN
+
+```
+1. Probe _copy_from_iter for send path
+2. Probe _copy_to_iter for recv path
+3. Filter by current->comm
+4. Extract: regs->di (buffer), regs->si (len)
+5. Correlate kernel addresses between send/recv
+```
+
+---
+
+## ADDITIONAL FAILURE PREDICTIONS
+
+```
+FAILURE 7: skb->len is payload, not full buffer size
+FAILURE 8: iter is kernel struct, cannot deref user parts directly
+FAILURE 9: 0x100 = 256 decimal, not 100 → hex confusion
+FAILURE 10: Loopback may reuse skb → same address for send/recv
+```

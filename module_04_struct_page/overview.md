@@ -509,3 +509,133 @@ FAILURE 4: _mapcount starts at -1, not 0 → off-by-one
 FAILURE 5: compound_head has bit 0 set in tail pages → must mask
 FAILURE 6: _refcount=0 doesn't mean immediate free, may be slab-owned
 ```
+
+---
+
+## W-QUESTIONS — NUMERICAL ANSWERS
+
+### WHAT: struct page Size
+```
+sizeof(struct page) = 64 bytes on typical x86_64
+16GB RAM = 16 × 2^30 bytes
+Pages = 16GB / 4KB = 4194304 pages
+mem_map size = 4194304 × 64 = 268435456 bytes = 256MB
+∴ 1.5% of RAM used for page metadata
+```
+
+### WHY: Refcount Separate from Mapcount
+```
+Page in page cache, not mapped: refcount=1, mapcount=-1
+Page mapped by 2 processes: refcount=3, mapcount=1
+refcount = all references (cache + mappings + temp)
+mapcount = PTE count only
+Free when refcount=0, not when mapcount=-1
+```
+
+### WHERE: mem_map Lives
+```
+Node 0: mem_map at 0xFFFF_EA00_0000_0000
+Node 1: mem_map at 0xFFFF_EA00_0400_0000 (offset by node)
+PFN 0x1234 on node 0:
+  page address = 0xFFFF_EA00_0000_0000 + 0x1234 × 64
+               = 0xFFFF_EA00_0000_0000 + 0x48D00
+               = 0xFFFF_EA00_0004_8D00
+```
+
+### WHO: Modifies Refcount
+```
+get_page(): refcount 1→2 (module takes reference)
+put_page(): refcount 2→1 (module releases)
+Map into PTE: mapcount -1→0 (first mapping)
+fork(): mapcount 0→1 (second process maps)
+munmap(): mapcount 1→0→unmapped
+```
+
+### WHEN: Compound Page Created
+```
+alloc_pages(GFP_KERNEL, 2) → order-2 = 4 pages
+Page 0 (head): compound_order=2, compound_dtor set
+Page 1 (tail): compound_head = &page0 | 1
+Page 2 (tail): compound_head = &page0 | 1
+Page 3 (tail): compound_head = &page0 | 1
+Access page2→compound_head() returns page0
+```
+
+### WITHOUT: No Page Flags
+```
+Without flags:
+  - Cannot tell if page is dirty → write entire cache
+  - Cannot tell if page locked → race conditions
+  - Cannot tell if on LRU → memory leak
+32-bit flags field, but only bits[0:23] for page flags
+Upper bits: node, zone, section encoding
+```
+
+### WHICH: Mapping Type
+```
+mapping & 3 = 0 → file-backed (address_space *)
+mapping & 3 = 1 → anonymous (anon_vma *)
+mapping & 3 = 2 → movable migration
+mapping & 3 = 3 → KSM merged page
+Example: 0xFFFF888112345001 & 3 = 1 → anonymous
+```
+
+---
+
+## ANNOYING CALCULATIONS — BREAKDOWN
+
+### Annoying: PFN to page Address
+```
+mem_map = 0xFFFF_EA00_0000_0000
+PFN = 0xABCD
+page_size = 64 bytes
+offset = 0xABCD × 64 = 0xABCD × 0x40 = 0x2AF340
+page_addr = 0xFFFF_EA00_0000_0000 + 0x2AF340 = 0xFFFF_EA00_002A_F340
+```
+
+### Annoying: Extract Zone from Flags
+```
+flags = 0x17FFFFC0_00014068
+ZONES_PGSHIFT = 60 (depends on config)
+zone_bits = (flags >> 60) & 0x3 = (0x17FFFFC) >> 4 & 0x3 = 0x1 & 0x3 = 1
+zone 1 = ZONE_DMA32 on typical config
+```
+
+### Annoying: Check PageLRU
+```
+PG_lru = bit 6
+flags = 0x14068
+bit 6 = (0x14068 >> 6) & 1 = (0x501) & 1 = 1
+∴ PageLRU = 1, page is on LRU list
+```
+
+### Annoying: Mapcount Interpretation
+```
+mapcount = -1 → no PTEs → 0 mappings
+mapcount = 0 → 1 PTE → 1 mapping (off by one!)
+mapcount = 1 → 2 PTEs → 2 mappings
+Real mappings = mapcount + 1 (when mapcount >= 0)
+```
+
+---
+
+## ATTACK PLAN
+
+```
+1. page_addr = mem_map + PFN × sizeof(struct page)
+2. zone = (flags >> ZONES_PGSHIFT) & ZONES_MASK
+3. PageXXX = (flags >> PG_XXX) & 1
+4. mapping type = mapping & 3
+5. mappings = mapcount + 1 (if mapcount >= 0)
+```
+
+---
+
+## ADDITIONAL FAILURE PREDICTIONS
+
+```
+FAILURE 7: sizeof(struct page) varies by config, not always 64
+FAILURE 8: mapcount=-1 means 0 mappings, mapcount=0 means 1 → off-by-one
+FAILURE 9: Zone bits position depends on CONFIG_SPARSEMEM
+FAILURE 10: compound_head has bit 0 set in tail → must mask with ~1
+```

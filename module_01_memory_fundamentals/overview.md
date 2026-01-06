@@ -518,3 +518,149 @@ FAILURE 4: bits[47:39] means bits 47 down to 39 → 9 bits, not 8
 FAILURE 5: Hex to binary conversion error → all indices wrong
 FAILURE 6: Forgetting TLB invalidation on CR3 change without PCID
 ```
+
+---
+
+## W-QUESTIONS — NUMERICAL ANSWERS
+
+### WHAT: Page Table Entry
+
+```
+PTE = 64-bit value at address 0xFFFF888112340000
+PTE value = 0x800000012345_8067
+
+bit[0] = 1 → present ✓
+bit[1] = 1 → writable ✓
+bit[2] = 1 → user-accessible ✓
+bit[5] = 1 → accessed ✓
+bit[6] = 1 → dirty ✓
+bits[51:12] = 0x12345 → PFN = 0x12345
+PFN × 4096 = 0x12345 × 0x1000 = 0x12345000 = physical address
+```
+
+### WHY: 4 Levels Not 3
+```
+3-level: 9+9+9+12 = 39 bits → 2^39 = 512GB max VA
+4-level: 9+9+9+9+12 = 48 bits → 2^48 = 256TB max VA
+Ratio = 256TB / 512GB = 512× more address space
+Modern apps need > 512GB → 4 levels required
+```
+
+### WHERE: Page Table Lives
+```
+CR3 = 0x00000000_ABCDE000
+PGD at PA 0xABCDE000 (physical RAM)
+Each level at different PA:
+  PGD: 0xABCDE000
+  PUD: 0x12340000
+  PMD: 0x56780000
+  PTE: 0x9ABC0000
+4 different pages × 4096 bytes = 16KB per full walk
+```
+
+### WHO: Accesses Page Tables
+```
+CPU MMU: hardware walk on TLB miss
+  → 4 RAM reads per translation
+Kernel: software walk for page fault
+  → pgd_offset(), pud_offset(), pmd_offset(), pte_offset()
+CR3 loaded by kernel on context switch
+  → switch_mm() writes CR3
+```
+
+### WHEN: Translation Happens
+```
+Every instruction fetch: PC → PA
+Every load: VA → PA
+Every store: VA → PA
+Example: MOV RAX, [0x7FFE1234] executes:
+  T₀: fetch instruction at VA → 1 translation
+  T₁: load from 0x7FFE1234 → 1 translation
+  Total: 2 translations per instruction
+```
+
+### WITHOUT: No TLB
+```
+With TLB (hit): 1 memory access
+Without TLB: 5 memory accesses (4 walk + 1 data)
+Slowdown = 5× per memory operation
+1 billion accesses/sec × 5 = 5 billion RAM reads/sec
+TLB hit rate 99% → only 1% pay 5× penalty
+```
+
+### WHICH: Index Selects Entry
+```
+VA = 0x7FFE_1234_5678
+PGD index = bits[47:39] = 0xFF = 255 → PGD[255]
+PUD index = bits[38:30] = 0x1F8 = 504 → PUD[504]
+PMD index = bits[29:21] = 0x91 = 145 → PMD[145]
+PTE index = bits[20:12] = 0x45 = 69 → PTE[69]
+```
+
+---
+
+## ANNOYING CALCULATIONS — BREAKDOWN
+
+### Annoying: Hex to Binary Split
+```
+0x7FFE → binary?
+7 = 0111, F = 1111, F = 1111, E = 1110
+0x7FFE = 0111_1111_1111_1110
+Split at bit 12: upper 4 bits = 0111 = 7, next 12 bits = FFE
+```
+
+### Annoying: 9-bit Index Extraction
+```
+48-bit VA, need bits[47:39]
+Method: (VA >> 39) & 0x1FF
+0x7FFE12345678 >> 39 = 0x7FFE12345678 / 2^39 = 0xFF
+0xFF & 0x1FF = 0xFF = 255 ✓
+```
+
+### Annoying: Entry Address Calculation  
+```
+PGD base = 0x1234_0000
+Index = 255
+Entry size = 8 bytes
+Entry address = 0x1234_0000 + 255 × 8 = 0x1234_0000 + 0x7F8 = 0x1234_07F8
+```
+
+### Annoying: Mask Flag Bits
+```
+Entry = 0x12345_067
+PA = entry & ~0xFFF = 0x12345_067 & 0xFFFFF_F000 = 0x12345_000
+Flags = entry & 0xFFF = 0x067 = 0000_0110_0111
+  bit0=1(present) bit1=1(write) bit2=1(user) bit5=1(accessed) bit6=1(dirty)
+```
+
+### Annoying: Page Count in Range
+```
+Start VA = 0x7FFE_0000_0000
+End VA = 0x7FFF_0000_0000
+Size = 0x7FFF_0000_0000 - 0x7FFE_0000_0000 = 0x1_0000_0000 = 4GB
+Pages = 4GB / 4KB = 4 × 2^30 / 4 × 2^10 = 2^20 = 1,048,576 pages
+```
+
+---
+
+## ATTACK PLAN
+
+```
+1. Convert hex to binary digit-by-digit: F=1111, E=1110, ...
+2. Draw 48-bit binary, mark bit positions 47,39,30,21,12,0
+3. Extract 9-bit chunks using shift+mask: (VA >> N) & 0x1FF
+4. Multiply index by 8 for entry address
+5. Mask low 12 bits for PA extraction
+6. Verify: reconstruct VA from indices using weighted sum
+```
+
+---
+
+## ADDITIONAL FAILURE PREDICTIONS
+
+```
+FAILURE 7: 0x1FF = 511, not 512 → 9-bit mask is 0x1FF not 0x200
+FAILURE 8: Entry at PGD[255] does NOT mean PA 255 → calculate offset
+FAILURE 9: ~0xFFF on 32-bit is 0xFFFFF000, on 64-bit is 0xFFFFFFFFFFFF000
+FAILURE 10: Index 0 is valid → 512 entries are [0,511]
+```

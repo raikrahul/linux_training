@@ -438,3 +438,146 @@ FAILURE 4: MPOL_BIND does NOT fall back → can OOM with free memory elsewhere
 FAILURE 5: kswapd wakes at LOW, not MIN → direct reclaim only at MIN
 FAILURE 6: ZONE_NORMAL on 32-bit is DIFFERENT from 64-bit → config dependent
 ```
+
+---
+
+## W-QUESTIONS — NUMERICAL ANSWERS
+
+### WHAT: NUMA Distance
+```
+Distance matrix from numactl:
+  node 0→0: 10 (local, baseline)
+  node 0→1: 21 (2.1× latency)
+  node 1→0: 21 (symmetric)
+  node 1→1: 10 (local)
+
+Local latency = 80ns
+Remote latency = 80ns × (21/10) = 168ns
+Extra = 168 - 80 = 88ns per remote access
+```
+
+### WHY: Zones Exist
+```
+32-bit PCI devices need DMA below 4GB → ZONE_DMA32
+ISA devices need DMA below 16MB → ZONE_DMA
+Modern devices → ZONE_NORMAL (above 4GB)
+
+Without zones: 32-bit device gets address 0x9_0000_0000
+Cannot DMA! Hardware failure.
+```
+
+### WHERE: Zone Boundaries
+```
+64GB system:
+ZONE_DMA: PA [0x0, 0x100_0000) = 0-16MB
+ZONE_DMA32: PA [0x100_0000, 0x1_0000_0000) = 16MB-4GB
+ZONE_NORMAL: PA [0x1_0000_0000, 0x10_0000_0000) = 4GB-64GB
+
+Pages per zone:
+  DMA: 16MB / 4KB = 4096 pages
+  DMA32: (4GB - 16MB) / 4KB = 1044480 pages
+  NORMAL: 60GB / 4KB = 15728640 pages
+```
+
+### WHO: Uses Each Zone
+```
+GFP_DMA: legacy ISA driver → ZONE_DMA only
+GFP_DMA32: 32-bit PCI → ZONE_DMA32 or lower
+GFP_KERNEL: normal use → ZONE_NORMAL with fallback
+GFP_HIGHUSER: user pages → ZONE_NORMAL preferred
+```
+
+### WHEN: Watermarks Trigger
+```
+Zone NORMAL:
+  managed = 1000000 pages
+  min = 10000, low = 12500, high = 15000
+
+At free = 14000:
+  14000 > 12500 (low) → kswapd sleeps
+
+At free = 11000:
+  11000 < 12500 (low) → kswapd wakes, reclaims
+
+At free = 8000:
+  8000 < 10000 (min) → direct reclaim in allocator
+```
+
+### WITHOUT: No NUMA Awareness
+```
+App on CPU 0 (node 0), allocates heavily
+Without NUMA: all memory from any node
+50% from node 1 → 50% × 88ns extra = 44ns average penalty
+
+With MPOL_LOCAL: prefer node 0
+0% remote → 0ns penalty
+Performance: +50% for memory-bound workload
+```
+
+### WHICH: Fallback Order
+```
+Request for ZONE_NORMAL fails:
+  1. Try ZONE_NORMAL on local node → FAIL
+  2. Try ZONE_NORMAL on remote nodes → FAIL
+  3. Try ZONE_DMA32 on local → FAIL
+  4. Try ZONE_DMA32 on remote → FAIL
+  5. Try ZONE_DMA → FAIL
+  6. Trigger kswapd/direct reclaim → retry
+  7. OOM kill → free memory → retry
+```
+
+---
+
+## ANNOYING CALCULATIONS — BREAKDOWN
+
+### Annoying: Zone Watermarks
+```
+managed_pages = 2000000
+min_free_kbytes = 67584 (kernel param)
+min_pages = 67584KB / 4KB = 16896 pages
+Split across 3 zones proportionally
+
+ZONE_NORMAL: 1500000 managed
+min = 16896 × (1500000/2000000) = 12672
+low = min × 1.25 = 15840
+high = min × 1.5 = 19008
+```
+
+### Annoying: NUMA Bandwidth Loss
+```
+Memory bandwidth local = 50 GB/s
+NUMA factor = 2.1× latency = ~60% effective bandwidth
+Remote bandwidth = 50 / 2.1 = 24 GB/s effective
+Loss = 50 - 24 = 26 GB/s = 52% bandwidth lost on remote
+```
+
+### Annoying: Zone Page Calculation
+```
+64GB RAM, 2 nodes of 32GB each
+Node 0: ZONE_DMA (16MB) + ZONE_DMA32 (4GB-16MB) + ZONE_NORMAL (28GB)
+Node 1: ZONE_NORMAL only (32GB, no DMA zones on node 1)
+Node 1 ZONE_NORMAL = 32GB / 4KB = 8388608 pages
+```
+
+---
+
+## ATTACK PLAN
+
+```
+1. Read /proc/zoneinfo for watermarks
+2. Read /proc/buddyinfo for free blocks
+3. numactl --hardware for distance matrix
+4. Calculate remote latency = local × (distance/10)
+5. numastat for miss counters
+```
+
+---
+
+## ADDITIONAL FAILURE PREDICTIONS
+
+```
+FAILURE 7: ZONE_DMA32 includes ZONE_DMA addresses (0-4GB, not 16MB-4GB)
+FAILURE 8: MPOL_BIND can OOM even with free memory on other nodes
+FAILURE 9: Watermarks in PAGES, min_free_kbytes in KB → unit conversion
+FAILURE 10: Second node may have only ZONE_NORMAL → no DMA zones there
+```
