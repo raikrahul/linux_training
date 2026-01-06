@@ -1,0 +1,11 @@
+# Keep only lesson files and main docs in git
+# Ignore all other markdown files
+module_*/*.md
+!module_*/lesson_*.md
+
+# Keep code files
+!module_*/code/*.c
+!module_*/code/Makefile
+
+# Keep exercises but not in git
+module_*/exercises/
