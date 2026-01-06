@@ -581,3 +581,152 @@ FAILURE 8: MPOL_BIND can OOM even with free memory on other nodes
 FAILURE 9: Watermarks in PAGES, min_free_kbytes in KB → unit conversion
 FAILURE 10: Second node may have only ZONE_NORMAL → no DMA zones there
 ```
+
+---
+
+## SHELL COMMANDS — PARADOXICAL THINKING EXERCISES
+
+### COMMAND 1: View NUMA Topology
+
+```bash
+numactl --hardware 2>/dev/null || cat /sys/devices/system/node/node*/meminfo
+
+# WHAT: NUMA nodes, CPUs per node, memory per node, distances
+# WHY: Understand memory locality for optimization
+# WHERE: /sys/devices/system/node/
+# WHO: Kernel exposes, numactl reads
+# WHEN: At boot, nodes discovered from ACPI SRAT
+# WITHOUT: Blind allocation, random NUMA placement
+# WHICH: node 0, node 1, ... with distances
+
+# EXAMPLE OUTPUT:
+# available: 2 nodes (0-1)
+# node 0 cpus: 0 1 2 3
+# node 0 size: 32768 MB
+# node 1 cpus: 4 5 6 7
+# node 1 size: 32768 MB
+# node distances:
+# node   0   1
+#   0:  10  21
+#   1:  21  10
+
+# CALCULATION:
+# Distance 10 = local = 80ns
+# Distance 21 = remote = 80 × 2.1 = 168ns
+# Extra latency = 168 - 80 = 88ns per remote access
+#
+# 1 billion memory accesses:
+# All local: 1B × 80ns = 80 seconds
+# All remote: 1B × 168ns = 168 seconds
+# 50% remote: 1B × 124ns = 124 seconds
+```
+
+### COMMAND 2: View Zone Information
+
+```bash
+cat /proc/zoneinfo | head -50
+
+# MEMORY DIAGRAM:
+# ┌─────────────────────────────────────────────────────────────────┐
+# │ Node 0, zone Normal                                             │
+# │                                                                 │
+# │ pages free     500000                                           │
+# │       min      10000    ← direct reclaim threshold              │
+# │       low      12500    ← kswapd wakeup threshold               │
+# │       high     15000    ← kswapd sleep threshold                │
+# │                                                                 │
+# │ managed        1048576  (4GB zone)                              │
+# │ spanned        1048576                                          │
+# │ present        1048576                                          │
+# │                                                                 │
+# │ WATER LEVEL DIAGRAM:                                            │
+# │                                                                 │
+# │    high ─────── 15000 ─── kswapd sleeps above this              │
+# │                   │                                             │
+# │    low  ─────── 12500 ─── kswapd wakes below this               │
+# │                   │                                             │
+# │    min  ─────── 10000 ─── direct reclaim below this             │
+# │                   │                                             │
+# │         ─────── 0      ─── OOM!                                 │
+# └─────────────────────────────────────────────────────────────────┘
+```
+
+### COMMAND 3: Monitor NUMA Misses
+
+```bash
+numastat -p $$
+
+# OUTPUT:
+# Per-node process memory usage (in MBs) for PID 1234 (bash)
+#                   Node 0    Node 1     Total
+#                   ------    ------     -----
+# Huge              0.00      0.00       0.00
+# Heap              1.50      0.00       1.50
+# Stack             0.10      0.00       0.10
+# Private           5.00      0.00       5.00
+# Total             6.60      0.00       6.60
+
+# CALCULATION:
+# All memory on Node 0 → optimal for CPUs 0-3
+# If this process migrates to CPU 4 (Node 1):
+#   6.6MB × (168-80)/80 = 6.6MB × 1.1 = 7.26MB worth of latency penalty
+#   Effective bandwidth: B / 2.1 = 47% of local
+```
+
+### COMMAND 4: Force NUMA Allocation
+
+```bash
+# Run on specific node
+numactl --membind=0 --cpunodebind=0 cat /proc/self/numa_maps
+
+# OUTPUT shows:
+# 00400000 bind:0 file=/bin/cat N0=10
+#                 ^^^^^^ forced to node 0
+#                        ^^ 10 pages from node 0
+
+# PARADOX TEST:
+numactl --membind=1 --cpunodebind=0 dd if=/dev/zero of=/dev/null bs=1M count=100
+
+# CPU 0 (Node 0) but memory forced to Node 1!
+# Every access = remote = 2.1× latency
+# Throughput should be ~48% of optimal
+```
+
+---
+
+## FINAL PARADOX QUESTIONS
+
+```
+Q1: Zone NORMAL is above 4GB, but fits in 32-bit PFN?
+    
+    CALCULATION:
+    Max physical = 64GB
+    PFN for 64GB = 64GB / 4KB = 16777216 = 0x1000000
+    Bits needed = log2(16777216) = 24 bits
+    32-bit PFN covers 2^32 × 4KB = 16TB physical
+    ZONE_NORMAL is fine!
+    
+Q2: min_free_kbytes = 67584 KB but min watermarks differ per zone?
+    
+    CALCULATION:
+    Total managed pages = 4000000
+    ZONE_DMA32: 1000000 managed (25%)
+    ZONE_NORMAL: 3000000 managed (75%)
+    
+    min for DMA32 = 67584 × 0.25 = 16896 pages
+    min for Normal = 67584 × 0.75 = 50688 pages
+    
+    Proportional distribution!
+    
+Q3: MPOL_BIND can cause OOM with free memory elsewhere?
+    
+    ANSWER:
+    Process bound to Node 1 only
+    Node 1: 0 free pages
+    Node 0: 32768 free pages
+    
+    Process request → check Node 1 → empty → OOM!
+    MPOL_BIND does NOT fall back to other nodes
+    
+    Solution: MPOL_PREFERRED (soft preference, can fall back)
+```

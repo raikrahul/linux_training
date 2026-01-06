@@ -582,3 +582,196 @@ FAILURE 8: Arg 7+ on stack, not in registers → different extraction
 FAILURE 9: current valid only in process context, not hardirq
 FAILURE 10: String compare: strcmp(current->comm, name) → max 15 chars!
 ```
+
+---
+
+## SHELL COMMANDS — PARADOXICAL THINKING EXERCISES
+
+### COMMAND 1: List Available Kprobe Points
+
+```bash
+sudo cat /sys/kernel/debug/tracing/available_filter_functions | grep handle_mm_fault
+sudo cat /proc/kallsyms | grep handle_mm_fault
+
+# WHAT: All kernel functions that can be probed
+# WHY: Not all symbols are probeable (inline, static, optimized out)
+# WHERE: /sys/kernel/debug/tracing/ for ftrace integration
+# WHO: Kernel exposes, modules/perf/bpf use
+# WHEN: Available at boot, changes with module load/unload
+# WITHOUT: Guess and fail, no discovery mechanism
+# WHICH: Symbol address tells you if function exists
+
+# CALCULATION:
+# kallsyms shows ~100,000 symbols on typical kernel
+# probeable functions ≈ 50,000 (no inline, no static)
+# Each symbol entry: ~40 bytes (addr + type + name)
+# kallsyms memory: 100,000 × 40 = 4MB
+```
+
+### COMMAND 2: Write and Load Kprobe Module
+
+```bash
+cat << 'EOF' > /tmp/kprobe_test.c
+#include <linux/module.h>
+#include <linux/kprobes.h>
+
+static struct kprobe kp = {
+    .symbol_name = "do_sys_openat2",  // openat2 syscall handler
+};
+
+// regs layout for do_sys_openat2(int dfd, const char __user *filename, ...)
+// x86_64: dfd=di, filename=si, how=dx, usize=cx
+static int handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+    // dfd = (int)regs->di → -100 means AT_FDCWD (current dir)
+    // filename = (char *)regs->si → userspace pointer
+    
+    // CALCULATION:
+    // regs at 0xFFFF888100001000
+    // regs->di at offset 0x70: 0xFFFF888100001070
+    // regs->si at offset 0x68: 0xFFFF888100001068
+    // regs->dx at offset 0x60: 0xFFFF888100001060
+    
+    if ((long)regs->di == -100) {  // AT_FDCWD = -100
+        printk("open: dfd=%ld (CWD) filename_ptr=%px\n",
+               (long)regs->di, (void *)regs->si);
+    }
+    return 0;
+}
+
+static int __init kprobe_init(void) {
+    kp.pre_handler = handler_pre;
+    return register_kprobe(&kp);
+}
+
+static void __exit kprobe_exit(void) {
+    unregister_kprobe(&kp);
+}
+
+module_init(kprobe_init);
+module_exit(kprobe_exit);
+MODULE_LICENSE("GPL");
+EOF
+
+# Build (need kernel headers)
+# make -C /lib/modules/$(uname -r)/build M=/tmp modules
+
+# MEMORY DIAGRAM:
+# ┌─────────────────────────────────────────────────────────────────┐
+# │ struct kprobe at 0xFFFF888112340000                             │
+# │                                                                 │
+# │ offset 0x00: addr = 0xFFFFFFFF812A5678 (resolved symbol)        │
+# │ offset 0x08: symbol_name = "do_sys_openat2\0"                   │
+# │ offset 0x18: pre_handler = 0xFFFFFFFFA0001000 (module func)     │
+# │ offset 0x20: post_handler = NULL                                │
+# │ offset 0x28: fault_handler = NULL                               │
+# │                                                                 │
+# │ At probe address:                                               │
+# │ Before: 0xFFFFFFFF812A5678: 55 (push rbp)                       │
+# │ After:  0xFFFFFFFF812A5678: CC (int3 - breakpoint)              │
+# └─────────────────────────────────────────────────────────────────┘
+```
+
+### COMMAND 3: Use ftrace Instead of Module
+
+```bash
+# Faster alternative: ftrace function tracing
+sudo sh -c 'echo handle_mm_fault > /sys/kernel/debug/tracing/set_ftrace_filter'
+sudo sh -c 'echo function > /sys/kernel/debug/tracing/current_tracer'
+cat /tmp/testfile  # Trigger some faults
+sudo cat /sys/kernel/debug/tracing/trace | tail -10
+sudo sh -c 'echo nop > /sys/kernel/debug/tracing/current_tracer'
+
+# CALCULATION:
+# ftrace overhead per call: ~100ns (timestamps, buffer write)
+# handle_mm_fault called 1000/sec under load
+# Overhead = 1000 × 100ns = 100μs/sec = 0.01% CPU
+#
+# With full stack trace enabled:
+# Stack walk: ~1μs per call
+# Overhead = 1000 × 1μs = 1ms/sec = 0.1% CPU
+```
+
+### COMMAND 4: Kretprobe for Return Value
+
+```bash
+cat << 'EOF' > /tmp/kretprobe_test.c
+#include <linux/module.h>
+#include <linux/kprobes.h>
+
+static struct kretprobe krp = {
+    .kp.symbol_name = "handle_mm_fault",
+    .maxactive = 20,  // Max concurrent probed calls
+};
+
+// Return value in regs->ax on x86_64
+static int ret_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
+{
+    long retval = regs_return_value(regs);  // = regs->ax
+    // retval: VM_FAULT_NOPAGE, VM_FAULT_MINOR, VM_FAULT_MAJOR, or error
+    
+    // CALCULATION:
+    // regs->ax at offset 0x50 in pt_regs
+    // regs at 0xFFFF888100001000 → ax at 0xFFFF888100001050
+    // Return values:
+    //   0 (VM_FAULT_NOPAGE) = nothing needed
+    //   256 (VM_FAULT_MINOR) = minor fault resolved
+    //   512 (VM_FAULT_MAJOR) = major fault (I/O)
+    //   negative = error
+    
+    if (retval < 0)
+        printk("handle_mm_fault returned error: %ld\n", retval);
+    return 0;
+}
+
+static int __init krp_init(void) {
+    krp.handler = ret_handler;
+    return register_kretprobe(&krp);
+}
+
+module_init(krp_init);
+MODULE_LICENSE("GPL");
+EOF
+
+# MEMORY:
+# kretprobe uses per-CPU buffers:
+# maxactive = 20 instances
+# Size per instance ≈ 64 bytes
+# 8 CPUs × 20 × 64 = 10KB memory for return probe
+```
+
+---
+
+## FINAL PARADOX QUESTIONS
+
+```
+Q1: Handler runs in "interrupt context" but process has PID?
+    
+    ANSWER:
+    INT3 exception = synchronous, in process context
+    current is valid → can access current->pid
+    BUT: cannot sleep (interrupts may be disabled)
+    in_interrupt() may return true (depending on kernel config)
+    Safe: printk, counter++, timestamp
+    Unsafe: mutex_lock, kmalloc(GFP_KERNEL), msleep
+    
+Q2: Why maxactive=20 not maxactive=1000?
+    
+    CALCULATION:
+    Each active instance = 64 bytes
+    maxactive=1000 × 8 CPUs = 8000 instances × 64 = 512KB
+    If function runs 1μs, rate = 1M/sec
+    Active = rate × duration = 1M × 1μs = 1 concurrent
+    maxactive=20 handles 20 nested calls safely
+    
+Q3: Kprobe replaces instruction with INT3. What about multi-byte instructions?
+    
+    ANSWER:
+    INT3 = 1 byte (0xCC)
+    Original instruction saved in kprobe->opcode
+    After INT3: single-step original instruction
+    
+    Problem: instruction crosses cache line?
+    Solution: kernel handles atomically with stop_machine on ARM
+    x86: breakpoint is 1 byte, always atomic
+```

@@ -568,3 +568,181 @@ FAILURE 8: Dirty pages need writeback before free → can't instant reclaim
 FAILURE 9: Active ratio too low → system is memory-cold, lots of cold data
 FAILURE 10: PG_referenced alone doesn't move page → needs kswapd scan
 ```
+
+---
+
+## SHELL COMMANDS — PARADOXICAL THINKING EXERCISES
+
+### COMMAND 1: View LRU Statistics
+
+```bash
+cat /proc/vmstat | grep -E "^nr_|^pgpg|^pswp"
+
+# WHAT: Page counts per LRU list, paging stats
+# WHY: Understand memory pressure and reclaim activity
+# WHERE: Per-node lruvec counters aggregated
+# WHO: kswapd updates on reclaim, page fault updates on access
+# WHEN: Continuously updated as pages move between lists
+# WITHOUT: Blind OOM, no visibility into memory state
+# WHICH: nr_active_anon, nr_inactive_anon, nr_active_file, nr_inactive_file
+
+# EXAMPLE OUTPUT:
+# nr_active_anon 125000
+# nr_inactive_anon 375000
+# nr_active_file 50000
+# nr_inactive_file 150000
+#
+# CALCULATION:
+# Active ratio (anon) = 125000 / (125000+375000) = 25%
+# Inactive = 75% → lots of cold anonymous pages
+#
+# Total anonymous = (125000+375000) × 4KB = 2GB
+# Total file = (50000+150000) × 4KB = 800MB
+# Total tracked = 2GB + 800MB = 2.8GB
+```
+
+### COMMAND 2: Force Page Cache and Measure
+
+```bash
+# Clear cache and measure file read
+sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'
+time cat /usr/lib/x86_64-linux-gnu/libc.so.6 > /dev/null
+time cat /usr/lib/x86_64-linux-gnu/libc.so.6 > /dev/null  # Should be faster
+
+# CALCULATION:
+# libc.so.6 ≈ 2MB
+# First read: disk → page cache → /dev/null
+#   Disk: 2MB @ 500MB/s = 4ms
+# Second read: page cache → /dev/null
+#   RAM: 2MB @ 10GB/s = 0.2ms
+#
+# Speedup = 4ms / 0.2ms = 20×
+#
+# MEMORY DIAGRAM:
+# ┌────────────────────────────────────────────────────────────────────┐
+# │ Page Cache for libc.so.6                                           │
+# │                                                                    │
+# │ address_space @ 0xFFFF888112340000                                 │
+# │ ├── host = inode for libc.so.6                                     │
+# │ └── i_pages (xarray)                                               │
+# │       ├── index 0 → page @ PFN 0x1000                              │
+# │       ├── index 1 → page @ PFN 0x1001                              │
+# │       ├── index 2 → page @ PFN 0x1002                              │
+# │       └── ... (512 pages for 2MB file)                             │
+# │                                                                    │
+# │ Each page: 4KB, total = 512 × 4KB = 2MB cached                     │
+# └────────────────────────────────────────────────────────────────────┘
+```
+
+### COMMAND 3: mlock Test
+
+```bash
+cat << 'EOF' > /tmp/mlock_test.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+int main() {
+    size_t size = 10 * 1024 * 1024;  // 10MB
+    void *ptr = malloc(size);
+    
+    printf("Before mlock: check VmLck in /proc/%d/status\n", getpid());
+    system("grep VmLck /proc/$PPID/status");
+    
+    if (mlock(ptr, size) < 0) {
+        perror("mlock");
+        return 1;
+    }
+    
+    printf("After mlock:\n");
+    system("grep VmLck /proc/$PPID/status");
+    
+    munlock(ptr, size);
+    free(ptr);
+}
+EOF
+gcc /tmp/mlock_test.c -o /tmp/mlock_test && /tmp/mlock_test
+
+# CALCULATION:
+# size = 10MB = 10485760 bytes
+# Pages = 10485760 / 4096 = 2560 pages
+# mlock() will:
+#   1. Fault in all 2560 pages if not present
+#   2. Move all 2560 pages to LRU_UNEVICTABLE
+#   3. Set VM_LOCKED on VMA
+#   4. Increment Mlocked counter by 2560
+#
+# VmLck should show: 10240 kB (10MB)
+```
+
+### COMMAND 4: Trigger and Observe Reclaim
+
+```bash
+# Consume memory until reclaim happens
+cat << 'EOF' > /tmp/pressure.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int main() {
+    for (int i = 0; i < 1000; i++) {
+        void *p = malloc(10 * 1024 * 1024);  // 10MB
+        memset(p, 'A', 10 * 1024 * 1024);    // Touch all pages
+        printf("Allocated %d × 10MB = %dMB\n", i+1, (i+1)*10);
+    }
+}
+EOF
+gcc /tmp/pressure.c -o /tmp/pressure
+
+# In one terminal: watch -n1 "grep -E 'Active|Inactive|Dirty' /proc/meminfo"
+# In another: /tmp/pressure
+
+# OBSERVATION:
+# As memory fills:
+# 1. Inactive(file) drops first (drop clean cache)
+# 2. Dirty pages written (pgpgout increases)
+# 3. Inactive(anon) starts swapping (pswpout increases)
+# 4. Active lists shrink (demotion to inactive)
+# 5. Eventually OOM killer activates
+```
+
+---
+
+## FINAL PARADOX QUESTIONS
+
+```
+Q1: 8GB RAM, 4GB swap, should be 12GB usable?
+    
+    ANSWER:
+    NO! Swap is 100× slower than RAM
+    Random swap access: 10ms per page (SSD) vs 100ns (RAM)
+    If 4GB in swap, 1GB accessed randomly:
+      RAM: 1GB / 10GB/s = 100ms
+      Swap: 1GB / 100MB/s = 10 seconds
+    System unusable long before 12GB used
+    
+Q2: Why does kernel track "active" and "inactive" separately?
+    
+    CALCULATION:
+    Single list with 1M pages, find coldest:
+      Scan all 1M to find lowest access time = 1M comparisons
+    
+    Two lists:
+      Inactive list = already cold
+      Just scan inactive, ~500K pages
+      Skip entire active list = 50% saved
+    
+Q3: Dirty page must be written before free. How long?
+    
+    CALCULATION:
+    1 dirty page = 4KB
+    HDD: 4KB @ 100MB/s = 40μs... BUT seek time = 10ms!
+    Real: 10ms per random dirty page
+    SSD: 4KB @ 500MB/s = 8μs, no seek
+    
+    1000 dirty pages:
+      HDD sequential: 4MB @ 100MB/s = 40ms
+      HDD random: 1000 × 10ms = 10 seconds!
+      SSD: 4MB @ 500MB/s = 8ms
+```
