@@ -746,3 +746,7 @@ Q3: Dirty page must be written before free. How long?
       HDD random: 1000 × 10ms = 10 seconds!
       SSD: 4MB @ 500MB/s = 8ms
 ```
+
+---
+
+[← Previous Lesson](../module_04_struct_page/lesson_04.md) | [Course Index](../index.md) | [Next Lesson →](../module_06_kprobe_tracing/lesson_06.md)

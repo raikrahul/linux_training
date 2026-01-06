@@ -728,3 +728,7 @@ Q3: mprotect on 1 byte protects entire page (4KB)?
       Protects entire page containing that 1 byte
     VMA split still happens at PAGE BOUNDARY
 ```
+
+---
+
+[← Previous Lesson](../module_08_rdma/lesson_08.md) | [Course Index](../index.md) | [Next Lesson →](../module_10_numa_zones/lesson_10.md)

@@ -711,3 +711,7 @@ Q3: Zero-copy receive possible?
     Limitation: page granularity (4KB), not byte
     RDMA: truly zero copy, NIC writes to user-registered memory
 ```
+
+---
+
+[← Previous Lesson](../module_06_kprobe_tracing/lesson_06.md) | [Course Index](../index.md) | [Next Lesson →](../module_08_rdma/lesson_08.md)

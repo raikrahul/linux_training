@@ -730,3 +730,7 @@ Q3: MPOL_BIND can cause OOM with free memory elsewhere?
     
     Solution: MPOL_PREFERRED (soft preference, can fall back)
 ```
+
+---
+
+[← Previous Lesson](../module_09_maple_tree/lesson_09.md) | [Course Index](../index.md) | [Course Index →](../index.md)

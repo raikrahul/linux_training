@@ -791,3 +791,7 @@ Q3: compound_head has bit 0 set in tail pages. How does that work?
     Bit 0 = 1 indicates "this is a tail page"
     Saves a separate flag bit in page->flags
 ```
+
+---
+
+[← Previous Lesson](../module_03_allocators/lesson_03.md) | [Course Index](../index.md) | [Next Lesson →](../module_05_advanced_memory/lesson_05.md)

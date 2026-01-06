@@ -775,3 +775,7 @@ Q3: Kprobe replaces instruction with INT3. What about multi-byte instructions?
     Solution: kernel handles atomically with stop_machine on ARM
     x86: breakpoint is 1 byte, always atomic
 ```
+
+---
+
+[← Previous Lesson](../module_05_advanced_memory/lesson_05.md) | [Course Index](../index.md) | [Next Lesson →](../module_07_network_tracing/lesson_07.md)

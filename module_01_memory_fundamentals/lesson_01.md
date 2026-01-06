@@ -849,3 +849,7 @@ Q3: Why is TLB flush on context switch expensive if TLB is "just a cache"?
     But context switch itself = 1μs
     TLB refill = 400× more expensive than switch!
 ```
+
+---
+
+[← Course Index](../index.md) | [Course Index](../index.md) | [Next Lesson →](../module_02_page_fault/lesson_02.md)

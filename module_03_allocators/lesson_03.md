@@ -880,3 +880,7 @@ Q3: GFP_ATOMIC can fail. What happens?
     Caller MUST handle NULL: if (!ptr) return -ENOMEM;
     Unlike GFP_KERNEL which retries and reclaims
 ```
+
+---
+
+[← Previous Lesson](../module_02_page_fault/lesson_02.md) | [Course Index](../index.md) | [Next Lesson →](../module_04_struct_page/lesson_04.md)

@@ -816,3 +816,7 @@ Q3: COW fault copies 4KB even if you write 1 byte. Why?
     Cannot have byte-level PTE → would need 4KB × 1000 = 4MB for one page
     Compromise: copy whole page, waste up to 4095 bytes
 ```
+
+---
+
+[← Previous Lesson](../module_01_memory_fundamentals/lesson_01.md) | [Course Index](../index.md) | [Next Lesson →](../module_03_allocators/lesson_03.md)
