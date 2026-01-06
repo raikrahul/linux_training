@@ -1,7 +1,8 @@
-# Keep only lesson files and main docs in git
-# Ignore all other markdown files
+# Keep only lesson files, index files, and main docs in git
+# Ignore all other markdown files in modules
 module_*/*.md
 !module_*/lesson_*.md
+!module_*/index.md
 
 # Keep code files
 !module_*/code/*.c
