@@ -2,20 +2,43 @@
 
 Professional deep-dive training into Linux kernel internals. Hands-on modules with real machine traces.
 
+---
+
 ## Course Modules
 
-| # | Module | Topics |
-|---|--------|--------|
-| 1 | [Memory Fundamentals](module_01_memory_fundamentals/) | Page tables, CR3, TLB, PCID, VMA |
-| 2 | [Page Fault Handling](module_02_page_fault/) | do_page_fault, handle_mm_fault, error codes |
-| 3 | [Memory Allocators](module_03_allocators/) | Buddy allocator, Slab, GFP flags |
-| 4 | [struct page Deep Dive](module_04_struct_page/) | Page flags, refcounting, mapping field |
-| 5 | [Advanced Memory](module_05_advanced_memory/) | LRU, mlock, anonymous pages, page cache |
-| 6 | [Kprobe Tracing](module_06_kprobe_tracing/) | register_kprobe, pt_regs, handler writing |
-| 7 | [Network Stack Tracing](module_07_network_tracing/) | sk_buff, copy_from_iter, double copy |
-| 8 | [RDMA Fundamentals](module_08_rdma/) | ibv_reg_mr, zero-copy, queue pairs |
-| 9 | [Maple Tree & VMA](module_09_maple_tree/) | VMA lookup, address space, maple tree |
-| 10 | [NUMA & Zones](module_10_numa_zones/) | NUMA nodes, memory zones, fallback |
+| # | Module | Lesson | Topics |
+|---|--------|--------|--------|
+| 1 | Memory Fundamentals | [Lesson 01](module_01_memory_fundamentals/lesson_01.md) | Page tables, CR3, TLB, PCID, VMA |
+| 2 | Page Fault Handling | [Lesson 02](module_02_page_fault/lesson_02.md) | do_page_fault, handle_mm_fault, error codes |
+| 3 | Memory Allocators | [Lesson 03](module_03_allocators/lesson_03.md) | Buddy allocator, Slab, GFP flags |
+| 4 | struct page Deep Dive | [Lesson 04](module_04_struct_page/lesson_04.md) | Page flags, refcounting, mapping field |
+| 5 | Advanced Memory | [Lesson 05](module_05_advanced_memory/lesson_05.md) | LRU, mlock, anonymous pages, page cache |
+| 6 | Kprobe Tracing | [Lesson 06](module_06_kprobe_tracing/lesson_06.md) | register_kprobe, pt_regs, handler writing |
+| 7 | Network Stack Tracing | [Lesson 07](module_07_network_tracing/lesson_07.md) | sk_buff, copy_from_iter, double copy |
+| 8 | RDMA Fundamentals | [Lesson 08](module_08_rdma/lesson_08.md) | ibv_reg_mr, zero-copy, queue pairs |
+| 9 | Maple Tree & VMA | [Lesson 09](module_09_maple_tree/lesson_09.md) | VMA lookup, address space, maple tree |
+| 10 | NUMA & Zones | [Lesson 10](module_10_numa_zones/lesson_10.md) | NUMA nodes, memory zones, fallback |
+
+---
+
+## What Each Lesson Contains
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ LESSON STRUCTURE                                                    │
+│                                                                     │
+│ 1. Core Concepts with ASCII Diagrams                                │
+│ 2. Kernel Code Examples (with file:line references)                 │
+│ 3. Userspace Examples (compilable C programs)                       │
+│ 4. AXIOMATIC EXERCISES — fill-in-the-blank calculations             │
+│ 5. W-QUESTIONS — What/Why/Where/Who/When/Without/Which              │
+│ 6. ANNOYING CALCULATIONS — step-by-step numerical breakdowns        │
+│ 7. SHELL COMMANDS — paradoxical thinking with real commands         │
+│ 8. FAILURE PREDICTIONS — common mistakes and how to avoid           │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
 
 ## Prerequisites
 
@@ -23,6 +46,8 @@ Professional deep-dive training into Linux kernel internals. Hands-on modules wi
 - GCC, Make
 - Root access for kernel modules
 - Basic C programming
+
+---
 
 ## Methodology
 
@@ -32,6 +57,8 @@ Every concept is:
 3. **Verified** with kprobes and live proofs
 4. **Calculated** step-by-step (primate-friendly)
 
+---
+
 ## Target Audience
 
 - Systems programmers wanting kernel internals
@@ -39,9 +66,18 @@ Every concept is:
 - Security researchers analyzing kernel behavior
 - Anyone tired of "magic happens here" explanations
 
-## License
+---
 
-Training content for professional development.
+## Quick Start
+
+```bash
+# Clone the repository
+git clone https://github.com/raikrahul/linux_training.git
+cd linux_training
+
+# Start with Lesson 01
+cat module_01_memory_fundamentals/lesson_01.md
+```
 
 ---
 
