@@ -747,6 +747,53 @@ Q3: Dirty page must be written before free. How long?
       SSD: 4MB @ 500MB/s = 8ms
 ```
 
+
+
+## AXIOMATIC DIAGRAMMATIC DEBUGGER TRACE
+
+### TRACE 1: LRU LIST MOVEMENT
+START: NEW_ANON_PAGE PFN=0xABC
+
+L1. ADD_TO_LRU:
+Set PG_lru=1
+Set PG_active=0 (Start Inactive)
+LIST_ADD(page, &lru_inactive_anon)
+NR_INACTIVE_ANON++
+
+L2. ACCESS_1:
+PTE Accessed Bit = 1
+Software ignores for now.
+
+L3. SHRINK_LIST (Reclaim):
+Scan Inactive List...
+Found PFN 0xABC
+Check PTE Access Bit... Is 1?
+Set PG_referenced=1
+Clear PTE Access Bit
+KEEP on Inactive (Second Chance)
+
+L4. ACCESS_2:
+PTE Access Bit = 1 again.
+
+L5. SHRINK_LIST (Pass 2):
+Found PFN 0xABC
+Check PTE Access Bit... Is 1?
+Was Referenced=1? YES
+PROMOTE:
+  LIST_DEL(page)
+  Set PG_active=1
+  LIST_ADD(page, &lru_active_anon)
+  NR_INACTIVE_ANON--
+  NR_ACTIVE_ANON++
+
+L6. EVICTION:
+Active List Full?
+DEMOTE 0xABC (if not accessed)
+PG_active=0
+Back to Inactive.
+If Reclaim scans again + No Access → EVICT (Swap Out) ✓
+
+
 ---
 
 [← Previous Lesson](../module_04_struct_page/lesson_04.md) | [Course Index](../index.md) | [Next Lesson →](../module_06_kprobe_tracing/lesson_06.md)

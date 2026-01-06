@@ -731,6 +731,48 @@ Q3: MPOL_BIND can cause OOM with free memory elsewhere?
     Solution: MPOL_PREFERRED (soft preference, can fall back)
 ```
 
+
+
+## AXIOMATIC DIAGRAMMATIC DEBUGGER TRACE
+
+### TRACE 1: PAGE ALLOC FALLBACK
+START: ALLOC_PAGES(Node=0, Order=0)
+
+Z1. ZONE_NORMAL_NODE0:
+Check Watermark:
+  Free = 9000
+  Low  = 10000
+  9000 < 10000? YES → FAIL
+  Wake kswapd.
+
+Z2. ZONE_DMA32_NODE0:
+Check Watermark:
+  Free = 500
+  Low  = 2000
+  FAIL.
+
+Z3. ZONE_DMA_NODE0:
+Check Watermark: FAIL.
+
+Z4. NODE_DISTANCE_LOOKUP:
+Zonelist order: Node 0 → Node 1 (Dist=21)
+
+Z5. ZONE_NORMAL_NODE1:
+Check Watermark:
+  Free = 50000
+  Low  = 10000
+  50000 > 10000? YES → SUCCESS
+
+Z6. ACCOUNTING:
+Allocated from Node 1.
+page_to_nid(page) = 1.
+Access Latency = Local * 2.1 (Penalty applied).
+
+Z7. RETURN:
+Return struct page * (Node 1 mem).
+User sees valid memory, simpler performance slower. ✓
+
+
 ---
 
 [← Previous Lesson](../module_09_maple_tree/lesson_09.md) | [Course Index](../index.md) | [Course Index →](../index.md)

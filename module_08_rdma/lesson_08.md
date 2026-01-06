@@ -659,6 +659,45 @@ Q3: Why is RDMA not used everywhere?
     4. Security: remote can write your memory!
 ```
 
+
+
+## AXIOMATIC DIAGRAMMATIC DEBUGGER TRACE
+
+### TRACE 1: RDMA WRITE POSTING
+START: IBV_POST_SEND
+
+R1. WR_PREP:
+WR.ADDR = 0x1000_0000 (Local Buffer)
+WR.LKEY = 0xABCD (MR Key)
+WR.RKEY = 0x1234 (Remote Key)
+WR.RADDR = 0x2000_0000 (Remote Address)
+
+R2. DOORBELL:
+MMIO_WRITE(0xBAR + 0x10) = QP_NUM
+CPU → PCIe Bus → NIC
+NIC Wakes Up.
+
+R3. NIC_FETCH_WQE:
+NIC reads WQE from 0x1000_0000 (User Mem) via DMA
+WQE Content decode: RDMA_WRITE, len=4096.
+
+R4. NIC_DMA_READ:
+Check LKEY 0xABCD in NIC_MTT (Translation Table)
+VA 0x1000_0000 → PA 0x3000_0000
+DMA Read 4096B from PA 0x3000_0000 to NIC.
+
+R5. PACKET_TX:
+Construct IB Packet:
+  DstLID, Op=RDMA_WRITE, RKEY=0x1234, RADDR=0x2000_0000
+  Payload = 4096B
+Send to Wire.
+
+R6. COMPLETION:
+Ack from Remote.
+NIC writes CQE to User CQ Buffer.
+User polls CQ... Found ✓
+
+
 ---
 
 [← Previous Lesson](../module_07_network_tracing/lesson_07.md) | [Course Index](../index.md) | [Next Lesson →](../module_09_maple_tree/lesson_09.md)

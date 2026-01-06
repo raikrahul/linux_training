@@ -881,6 +881,53 @@ Q3: GFP_ATOMIC can fail. What happens?
     Unlike GFP_KERNEL which retries and reclaims
 ```
 
+
+
+## AXIOMATIC DIAGRAMMATIC DEBUGGER TRACE
+
+### TRACE 1: ORDER CALCULATION LOOP
+START: SIZE=14000
+
+C1. PAGES_NEEDED:
+14000 / 4096 = 3 remainder 1712
+3 + 1 = 4 pages
+IDX_SET = {0, 1, 2, 3}
+TOTAL_BYTES = 4 * 4096 = 16384
+
+C2. ORDER_CALC:
+O=0 → 2^0=1 < 4 ✗
+O=1 → 2^1=2 < 4 ✗
+O=2 → 2^2=4 >= 4 ✓
+RESULT_ORDER = 2
+
+C3. BUDDY_SEARCH (Zones):
+ZONE_NORMAL(2) free_area[2].nr_free = 0 ✗
+ZONE_NORMAL(2) free_area[3].nr_free = 1 ✓ (Split needed)
+
+C4. SPLIT_OP:
+BLOCK_BASE = 0x1000 (Ord3)
+SPLIT 0x1000(Ord3) → 0x1000(Ord2) + 0x1004(Ord2)
+ADD 0x1004 TO free_area[2]
+RETURN 0x1000
+STATE: free_area[3]-- → free_area[2]++
+
+C5. ADDRESS_CHECK:
+PFN=0x1000
+PA=0x1000000
+SIZE=16KB
+RANGE=[0x1000000, 0x1004000)
+14000 < 16384 ✓
+
+C6. FREE_OP (MERGE):
+FREE(0x1000, Ord2)
+BUDDY = 0x1000 ^ (1<<2) = 0x1000 ^ 4 = 0x1004
+IS_BUDDY_FREE(0x1004)? YES
+REMOVE 0x1004 FROM free_area[2]
+MERGE 0x1000 + 0x1004 → 0x1000(Ord3)
+ADD 0x1000 TO free_area[3]
+STATE: free_area[2]-- → free_area[3]++ ✓
+
+
 ---
 
 [← Previous Lesson](../module_02_page_fault/lesson_02.md) | [Course Index](../index.md) | [Next Lesson →](../module_04_struct_page/lesson_04.md)

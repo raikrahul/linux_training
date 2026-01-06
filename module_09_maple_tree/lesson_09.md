@@ -729,6 +729,46 @@ Q3: mprotect on 1 byte protects entire page (4KB)?
     VMA split still happens at PAGE BOUNDARY
 ```
 
+
+
+## AXIOMATIC DIAGRAMMATIC DEBUGGER TRACE
+
+### TRACE 1: MAPLE TREE WALKING
+START: FIND_VMA(0x4000)
+
+T1. ROOT_READ:
+Load MM->MM_MT (Root Ptr).
+Is Pointer? Yes.
+Type = MAPLE_ARANGE_64 (Range Node)
+
+T2. NODE_DECODE (Level 1):
+Node Base = 0xFFFF88805555
+Pivots = [0x1000, 0x5000, 0x9000]
+Slots  = [ChildA, ChildB, ChildC, ChildD]
+Compare 0x4000:
+  0x4000 > 0x1000? YES
+  0x4000 < 0x5000? YES
+  ∴ Follow Slot[1] (ChildB)
+
+T3. NODE_DECODE (Level 0 Leaf):
+Node Base = ChildB
+Pivots = [0x2000, 0x3000, 0x4000]
+Slots  = [VMA_X, VMA_Y, NULL]
+Compare 0x4000:
+  0x4000 > 0x2000? YES
+  0x4000 >= 0x3000? YES (Wait, pivot is max inclusive?)
+  MAPLE_RANGE_64 logic check...
+  Actually, VMA at 0x3000-0x5000 covers 0x4000.
+  Slot[Y] has VMA range [0x3000, 0x5000].
+
+T4. RESULT_CHECK:
+VMA = Slot[Y]
+VMA->Start = 0x3000
+VMA->End   = 0x5000
+0x3000 <= 0x4000 < 0x5000? YES
+RETURN VMA ✓
+
+
 ---
 
 [← Previous Lesson](../module_08_rdma/lesson_08.md) | [Course Index](../index.md) | [Next Lesson →](../module_10_numa_zones/lesson_10.md)

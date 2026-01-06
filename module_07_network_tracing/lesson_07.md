@@ -712,6 +712,51 @@ Q3: Zero-copy receive possible?
     RDMA: truly zero copy, NIC writes to user-registered memory
 ```
 
+
+
+## AXIOMATIC DIAGRAMMATIC DEBUGGER TRACE
+
+### TRACE 1: SKB LIFECYCLE (RECV)
+START: NIC_DMA_COMPLETE
+
+N1. INTERRUPT:
+Vector=IRQ_NET
+NAPI_SCHEDULE()
+Yield to SoftIRQ.
+
+N2. SOFTIRQ_NET_RX:
+ALLOC_SKB(Len=1536) → 0xFFFF88810000
+DMA_UNMAP
+skb->head = 0xFFFF88820000
+skb->data = 0xFFFF88820040 (+64 headroom)
+skb->len  = 1024 (payload)
+
+N3. UPLIFT (GRO):
+Merge check... No merge.
+IP_RCV(skb)
+Check Checksum... ✓
+IP Header strip: skb->data += 20 = 0xFFFF88820054
+
+N4. UDP_RCV:
+Lookup Socket(Port=9999)... FOUND
+ENQUEUE_SKB(sk, skb)
+Wakeup Process.
+
+N5. PROCESS_WAKE:
+recvfrom(buf=0x7F001000)
+DEQUEUE_SKB
+COPY_TO_USER(To=0x7F001000, From=0xFFFF88820054, Len=1024)
+CPU_COPY_LOOP:
+  read 8B from Kernel
+  write 8B to User
+  Repeat 128 times.
+
+N6. FREE_SKB:
+kfree_skb(skb)
+Slab Free(0xFFFF88810000)
+Refcount 1→0 ✓
+
+
 ---
 
 [← Previous Lesson](../module_06_kprobe_tracing/lesson_06.md) | [Course Index](../index.md) | [Next Lesson →](../module_08_rdma/lesson_08.md)

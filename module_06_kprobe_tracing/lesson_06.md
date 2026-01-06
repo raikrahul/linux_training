@@ -776,6 +776,47 @@ Q3: Kprobe replaces instruction with INT3. What about multi-byte instructions?
     x86: breakpoint is 1 byte, always atomic
 ```
 
+
+
+## AXIOMATIC DIAGRAMMATIC DEBUGGER TRACE
+
+### TRACE 1: KPROBE HIT CHAIN
+START: IP=0xFFFFFFFF81001234 (Target)
+
+K1. REGISTRATION:
+MEM[0xFFFFFFFF81001234] saved as 0x55 (PUSH RBP)
+MEM[0xFFFFFFFF81001234] written as 0xCC (INT3)
+
+K2. EXECUTION:
+CPU fetches 0xCC at 0xFFFFFFFF81001234
+EXCEPTION #BP (Vector 3)
+
+K3. HANDLER_ENTRY:
+PUSH REGS (Construct pt_regs)
+REGS->IP = 0xFFFFFFFF81001235 (Next Byte)
+REGS->IP -= 1 (Adjust to Fault Addr) = 0xFFFFFFFF81001234
+
+K4. KPROBE_LOOKUP:
+HASH_LOOKUP(0xFFFFFFFF81001234) → FOUND struct kprobe
+PRE_HANDLER(kprobe, regs) called.
+
+K5. SINGLE_STEP:
+Set TF (Trap Flag) in FLAGS
+Execute original opcode 0x55 (out of line buffer)
+EXCEPTION #DB (Vector 1)
+
+K6. POST_STEP:
+Clear TF
+Resume execution at 0xFFFFFFFF81001235
+
+K7. OVERHEAD_CALC:
+Exceptions: 2 (BP + DB)
+Context Switches: 0
+Memory Writes: 0
+Cycles: ~1500 per hit.
+1M hits/sec = 1.5B cycles = 50% of 3GHz core. ✗ HEAVY LOAD
+
+
 ---
 
 [← Previous Lesson](../module_05_advanced_memory/lesson_05.md) | [Course Index](../index.md) | [Next Lesson →](../module_07_network_tracing/lesson_07.md)

@@ -792,6 +792,51 @@ Q3: compound_head has bit 0 set in tail pages. How does that work?
     Saves a separate flag bit in page->flags
 ```
 
+
+
+## AXIOMATIC DIAGRAMMATIC DEBUGGER TRACE
+
+### TRACE 1: REFCOUNT/MAPCOUNT LOGIC
+START: ALLOC_PAGE() → PFN=0x500
+
+M1. INITIAL_STATE:
+PAGE_ADDR = MEM_MAP + (0x500 * 64)
+flags = 0
+_refcount = 1
+_mapcount = -1
+
+M2. PROCESS_A_MAP:
+PTE_A[0x10] = PFN_0x500
+PAGE_ADD_RMAP()
+_refcount: 1 → 2 (1 for alloc + 1 for map) (Wait, alloc ref consumed? No)
+Logic: Alloc=1. Map=1. Total=2.
+_mapcount: -1 → 0 (1 mapping)
+
+M3. FORK_PROCESS_B:
+SIZE 1GB NOT COPY. PTE COPY ONLY.
+PTE_B[0x10] = PFN_0x500
+PAGE_DUP_RMAP()
+_refcount: 2 → 3
+_mapcount: 0 → 1 (2 mappings)
+
+M4. PROCESS_A_UNMAP:
+ZAP_PTE(PTE_A)
+PAGE_REMOVE_RMAP()
+_refcount: 3 → 2
+_mapcount: 1 → 0
+
+M5. PROCESS_B_EXIT:
+ZAP_PTE(PTE_B)
+PAGE_REMOVE_RMAP()
+_refcount: 2 → 1
+_mapcount: 0 → -1
+
+M6. FREE_PAGE:
+PUT_PAGE()
+_refcount: 1 → 0
+IF 0 → RETURN_TO_BUDDY ✓
+
+
 ---
 
 [← Previous Lesson](../module_03_allocators/lesson_03.md) | [Course Index](../index.md) | [Next Lesson →](../module_05_advanced_memory/lesson_05.md)
