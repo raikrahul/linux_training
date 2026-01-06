@@ -1,0 +1,21 @@
+- [x] Fetch Real Kernel Data and Configuration
+  - [x] Get Kernel Version and Source Path
+  - [x] Analyze Memory Model (Sparse/Flat) from Config
+  - [x] Locate key header files (mm.h, mm_types.h, page-flags.h)
+- [x] "Grill" the Tasks (Problem Analysis)
+  - [x] Deconstruct User Rules into Axiomatic Constraints
+  - [x] Identify "Meat" of MM Problem (Struct Page, PFN, Physical Address)
+  - [x] List Axioms required (Byte, Word, Page Size, Memory Map)
+- [x] Design the Axiomatic Worksheet Structure
+  - [x] Define the logic chain: Bytes -> Addresses -> PFNs -> Struct Page
+  - [x] Plan numerical examples (Start, Middle, End)
+- [x] Design the Kernel Module Skeleton
+  - [x] Define "Boilerplate" vs "Fun Parts"
+  - [x] Plan Bug Injection
+- [/] Page Fault Observation Infrastructure
+  - [x] Grill the sub-tasks (see implementation_plan.md)
+  - [x] Derive kprobe mechanism
+  - [x] Derive handle_mm_fault
+  - [x] Build observation driver (pagefault_observer.c)
+  - [ ] Test with GDB integration
+ (e.g., wrong PFN calculation)
