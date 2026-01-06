@@ -4,80 +4,344 @@
 
 This module teaches you how to instrument the running kernel using kprobes. You will write kernel modules that intercept function calls and extract runtime data.
 
-## Learning Objectives
+---
 
-By the end of this module, you will be able to:
+## 1. What is a Kprobe?
 
-1. Register kprobes on kernel functions
-2. Access function arguments via pt_regs
-3. Extract data from kernel structures
-4. Filter probes by process or condition
-5. Analyze output in dmesg
+A kprobe inserts a breakpoint instruction at any kernel address:
 
-## Key Concepts
+```
+Original function:
+do_page_fault:
+    push rbp          ← Normal instruction
+    mov rbp, rsp
+    ...
 
-### What is a Kprobe?
-
-A kprobe places a breakpoint at a kernel function. When hit:
-1. CPU traps to kprobe handler
-2. Your handler runs with access to registers
-3. Original function continues
-
-```c
-static struct kprobe kp = {
-    .symbol_name = "do_page_fault",
-    .pre_handler = my_handler,
-};
-
-register_kprobe(&kp);
+With kprobe:
+do_page_fault:
+    int3              ← Breakpoint (0xCC)
+    mov rbp, rsp
+    ...
 ```
 
-### Accessing Arguments
+When CPU hits `int3`:
+1. Trap to kprobe handler
+2. Run your pre_handler
+3. Single-step original instruction
+4. Run your post_handler (optional)
+5. Continue execution
 
-On x86_64, function arguments are in registers:
+---
 
-| Argument | Register | pt_regs field |
-|----------|----------|---------------|
-| 1st | RDI | regs->di |
-| 2nd | RSI | regs->si |
-| 3rd | RDX | regs->dx |
-| 4th | RCX | regs->cx |
-| 5th | R8 | regs->r8 |
-| 6th | R9 | regs->r9 |
-
-### Handler Example
+## 2. Kprobe Structure
 
 ```c
-static int handler_pre(struct kprobe *p, struct pt_regs *regs) {
-    struct pt_regs *fault_regs = (struct pt_regs *)regs->di;
-    unsigned long address = regs->si;
+// include/linux/kprobes.h
+struct kprobe {
+    // Probe location (set one of these)
+    kprobe_opcode_t *addr;       // Exact address
+    const char *symbol_name;     // Function name
+    unsigned int offset;         // Offset into function
     
-    pr_info("Fault at address: %lx\n", address);
+    // Handlers
+    kprobe_pre_handler_t pre_handler;    // Before instruction
+    kprobe_post_handler_t post_handler;  // After instruction
+    
+    // Internal
+    struct list_head list;
+    kprobe_opcode_t opcode;      // Saved original instruction
+    // ...
+};
+```
+
+---
+
+## 3. Register Arguments on x86_64
+
+When your handler runs, `regs` contains the CPU state at probe point:
+
+```
+x86_64 Calling Convention:
+┌───────────┬──────────────────┬───────────────────┐
+│ Argument  │ Register         │ pt_regs field     │
+├───────────┼──────────────────┼───────────────────┤
+│ 1st       │ RDI              │ regs->di          │
+│ 2nd       │ RSI              │ regs->si          │
+│ 3rd       │ RDX              │ regs->dx          │
+│ 4th       │ RCX              │ regs->cx          │
+│ 5th       │ R8               │ regs->r8          │
+│ 6th       │ R9               │ regs->r9          │
+│ Return    │ RAX              │ regs->ax          │
+│ Stack Ptr │ RSP              │ regs->sp          │
+│ Instr Ptr │ RIP              │ regs->ip          │
+└───────────┴──────────────────┴───────────────────┘
+```
+
+---
+
+## 4. Basic Kprobe Module
+
+```c
+// kprobe_basic.c
+#include <linux/module.h>
+#include <linux/kprobes.h>
+#include <linux/sched.h>
+
+static struct kprobe kp = {
+    .symbol_name = "do_sys_openat2",
+};
+
+// Called BEFORE the probed instruction
+static int handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+    // do_sys_openat2(int dfd, const char __user *filename, ...)
+    // arg1 = regs->di = dfd
+    // arg2 = regs->si = filename pointer
+    
+    char filename[256];
+    
+    // Copy filename from userspace
+    if (strncpy_from_user(filename, (char __user *)regs->si, 255) > 0) {
+        pr_info("[OPEN] PID=%d COMM=%s FILE=%s\n",
+                current->pid, current->comm, filename);
+    }
+    
+    return 0;  // 0 = continue execution
+}
+
+static int __init kprobe_init(void)
+{
+    int ret;
+    
+    kp.pre_handler = handler_pre;
+    
+    ret = register_kprobe(&kp);
+    if (ret < 0) {
+        pr_err("register_kprobe failed: %d\n", ret);
+        return ret;
+    }
+    
+    pr_info("Kprobe registered at %px\n", kp.addr);
     return 0;
+}
+
+static void __exit kprobe_exit(void)
+{
+    unregister_kprobe(&kp);
+    pr_info("Kprobe unregistered\n");
+}
+
+module_init(kprobe_init);
+module_exit(kprobe_exit);
+MODULE_LICENSE("GPL");
+```
+
+### Makefile
+
+```makefile
+obj-m += kprobe_basic.o
+
+KDIR := /lib/modules/$(shell uname -r)/build
+
+all:
+	make -C $(KDIR) M=$(PWD) modules
+
+clean:
+	make -C $(KDIR) M=$(PWD) clean
+```
+
+### Usage
+
+```bash
+$ make
+$ sudo insmod kprobe_basic.ko
+$ cat /etc/passwd  # Trigger some opens
+$ dmesg | tail
+[OPEN] PID=1234 COMM=cat FILE=/etc/passwd
+[OPEN] PID=1234 COMM=cat FILE=/lib/x86_64-linux-gnu/libc.so.6
+$ sudo rmmod kprobe_basic
+```
+
+---
+
+## 5. Kprobe for Page Faults
+
+```c
+// fault_kprobe.c
+#include <linux/module.h>
+#include <linux/kprobes.h>
+#include <linux/mm.h>
+
+static struct kprobe kp = {
+    .symbol_name = "handle_mm_fault",
+};
+
+// handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
+//                 unsigned int flags, struct pt_regs *regs)
+static int handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+    struct vm_area_struct *vma = (struct vm_area_struct *)regs->di;
+    unsigned long address = regs->si;
+    unsigned int flags = regs->dx;
+    
+    // Filter by process name
+    if (strcmp(current->comm, "my_program") != 0)
+        return 0;
+    
+    pr_info("[FAULT] PID=%d ADDR=0x%lx FLAGS=0x%x "
+            "VMA=[0x%lx-0x%lx] PROT=%c%c%c\n",
+            current->pid,
+            address,
+            flags,
+            vma->vm_start, vma->vm_end,
+            (vma->vm_flags & VM_READ)  ? 'r' : '-',
+            (vma->vm_flags & VM_WRITE) ? 'w' : '-',
+            (vma->vm_flags & VM_EXEC)  ? 'x' : '-');
+    
+    return 0;
+}
+
+static int __init fault_kprobe_init(void)
+{
+    kp.pre_handler = handler_pre;
+    return register_kprobe(&kp);
+}
+
+static void __exit fault_kprobe_exit(void)
+{
+    unregister_kprobe(&kp);
+}
+
+module_init(fault_kprobe_init);
+module_exit(fault_kprobe_exit);
+MODULE_LICENSE("GPL");
+```
+
+---
+
+## 6. Kretprobe: Tracing Return Values
+
+```c
+// copy_kretprobe.c
+#include <linux/module.h>
+#include <linux/kprobes.h>
+
+static struct kretprobe krp = {
+    .kp.symbol_name = "_copy_from_user",
+    .maxactive = 20,  // Max concurrent probes
+};
+
+// Called when function returns
+static int ret_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
+{
+    unsigned long retval = regs_return_value(regs);
+    
+    // _copy_from_user returns number of bytes NOT copied
+    // 0 = success
+    if (retval != 0) {
+        pr_warn("[COPY_FAIL] PID=%d COMM=%s bytes_failed=%lu\n",
+                current->pid, current->comm, retval);
+    }
+    
+    return 0;
+}
+
+static int entry_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
+{
+    // Can save data here to use in ret_handler
+    // ri->data is available for storage
+    return 0;
+}
+
+static int __init copy_kretprobe_init(void)
+{
+    krp.handler = ret_handler;
+    krp.entry_handler = entry_handler;
+    krp.data_size = 0;  // No private data
+    
+    return register_kretprobe(&krp);
+}
+
+static void __exit copy_kretprobe_exit(void)
+{
+    unregister_kretprobe(&krp);
+}
+
+module_init(copy_kretprobe_init);
+module_exit(copy_kretprobe_exit);
+MODULE_LICENSE("GPL");
+```
+
+---
+
+## 7. Safety Rules
+
+### DO NOT:
+
+```c
+// WRONG: Sleeping in handler
+static int handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+    msleep(100);  // WILL CRASH - atomic context!
+    kmalloc(100, GFP_KERNEL);  // WILL CRASH - can sleep!
+}
+
+// WRONG: Dereferencing without checking
+static int handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+    struct foo *ptr = (void *)regs->di;
+    pr_info("%d\n", ptr->value);  // May crash if ptr is NULL!
 }
 ```
 
-### Safety Rules
+### DO:
 
-1. Never sleep in handlers (atomic context)
-2. Minimize work in handlers
-3. Use printk_ratelimit for frequent events
-4. Check pointers before dereferencing
+```c
+// CORRECT: Check pointers
+static int handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+    struct foo *ptr = (void *)regs->di;
+    
+    if (!ptr)
+        return 0;
+    
+    pr_info("%d\n", ptr->value);
+}
 
-## Hands-On Files
+// CORRECT: Rate limit output
+static int handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+    if (printk_ratelimit())
+        pr_info("...\n");
+}
 
-| File | Description |
-|------|-------------|
-| `probe_0_axioms.md` | Kprobe fundamentals |
-| `probe_0_logic_trace.md` | Handler tracing example |
-| `code/kprobe_driver.c` | Working kprobe module |
+// CORRECT: Atomic allocations only
+static int handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+    void *p = kmalloc(100, GFP_ATOMIC);  // OK
+}
+```
 
-## Prerequisites
+---
 
-- Kernel module development basics
-- x86_64 calling convention
-- Module 2: Page Fault Handling
+## 8. Practice Exercises
+
+### Exercise 1: System Call Tracer
+
+Create a kprobe that logs all execve() calls with the program path.
+
+### Exercise 2: Memory Allocation Tracker
+
+Create kretprobes on kmalloc/kfree to track allocation patterns.
+
+### Exercise 3: Network Packet Counter
+
+Create a kprobe on netif_receive_skb to count packets per interface.
+
+---
 
 ## Next Module
 
 [Module 7: Network Stack Tracing →](../module_07_network_tracing/)
+
+[← Back to Course Index](../index.md)
